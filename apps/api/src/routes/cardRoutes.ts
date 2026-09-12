@@ -7,7 +7,7 @@ import {
   deleteCard,
 } from "../controllers/cardController";
 
-const router = Router();
+const router: Router = Router();
 
 // Every card route requires a logged-in user — applied once here rather
 // than repeated in each controller function.

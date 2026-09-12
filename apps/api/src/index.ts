@@ -4,6 +4,10 @@ import cors from "cors";
 import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import { connectToDatabase } from "./config/database";
+import authRoutes from "./routes/authRoutes";
+import workspaceRoutes from "./routes/workspaceRoutes";
+import boardRoutes from "./routes/boardRoutes";
+import listRoutes from "./routes/listRoutes";
 import cardRoutes from "./routes/cardRoutes";
 
 const PORT = process.env.PORT || 4000;
@@ -15,6 +19,10 @@ app.use(cors());
 // Mounted at root rather than under /api/* — nginx or a load balancer in
 // front of this service is what would add an /api prefix if needed later,
 // keeping this service's own routing simple.
+app.use(authRoutes);
+app.use(workspaceRoutes);
+app.use(boardRoutes);
+app.use(listRoutes);
 app.use(cardRoutes);
 
 app.get("/health", (req, res) => res.json({ status: "ok" }));
