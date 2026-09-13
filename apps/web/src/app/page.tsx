@@ -1,14 +1,27 @@
+"use client";
+
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/context/AuthContext";
+
 /**
- * Temporary placeholder home page for the initial scaffold.
- * Will become the landing/login page once auth is built (Phase 1).
+ * The home page has no content of its own — it just routes the visitor
+ * to the right place based on whether they're logged in. Waits for
+ * isLoading to resolve first, so a logged-in user on refresh doesn't
+ * flash through /login before landing on /workspaces.
  */
 export default function HomePage() {
+  const { user, isLoading } = useAuth();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (isLoading) return;
+    router.replace(user ? "/workspaces" : "/login");
+  }, [user, isLoading, router]);
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-gray-50">
-      <div className="text-center">
-        <h1 className="text-3xl font-bold text-gray-900">fluxboard</h1>
-        <p className="mt-2 text-gray-500">Scaffold running — auth and boards coming next.</p>
-      </div>
+      <p className="text-gray-400">Loading...</p>
     </main>
   );
 }

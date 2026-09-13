@@ -106,3 +106,47 @@ export async function deleteCard(req: Request, res: Response) {
 
   res.json({ deleted: toCardResponse(card) });
 }
+
+/**
+ * PATCH /cards/:cardId/move
+ * Moves a card to a (possibly different) list, at a specific index.
+ * This is the endpoint the frontend calls after a drag-and-drop drop,
+ * whether the card moved within one list or across two different lists —
+ * both cases update cardOrder on one or two ListModel documents.
+ */
+export async function moveCard(req: Request, res: Response) {
+  const { cardId } = req.params;
+  const { toListId, newIndex } = req.body;
+
+  if (!toListId || typeof newIndex !== "number") {
+    return res.status(400).json({ error: "toListId and newIndex are required" });
+  }
+
+  const card = await CardModel.findById(cardId);
+  if (!card) {
+    return res.status(404).json({ error: "card not found" });
+  }
+
+  const fromListId = card.listId.toString();
+
+  // Remove the card from its old list's cardOrder — a no-op $pull if the
+  // card is moving within the same list it's already in.
+  await ListModel.findByIdAndUpdate(fromListId, { $pull: { cardOrder: card._id } });
+
+  // Insert into the destination list's cardOrder at the requested index.
+  const destinationList = await ListModel.findById(toListId);
+  if (!destinationList) {
+    return res.status(404).json({ error: "destination list not found" });
+  }
+  destinationList.cardOrder.splice(newIndex, 0, card._id);
+  await destinationList.save();
+
+  // Update the card's own listId to match — cardOrder arrays are the
+  // source of truth for ordering, but listId is what every other query
+  // (e.g. listCardsForList) filters by, so both must stay in sync.
+  card.listId = toListId;
+  await card.save();
+
+  res.json(toCardResponse(card));
+}
+

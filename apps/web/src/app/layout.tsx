@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { AuthProvider } from "@/context/AuthContext";
 
 export const metadata: Metadata = {
   title: "fluxboard",
@@ -7,9 +8,9 @@ export const metadata: Metadata = {
 };
 
 /**
- * Root layout wrapping every page in the app. Auth/theme providers that
- * need to be available app-wide get added here as they're built (e.g. a
- * SessionProvider once auth is implemented).
+ * Root layout wrapping every page in the app. AuthProvider makes the
+ * logged-in user (and login/signup/logout functions) available to any
+ * page via the useAuth() hook, without prop-drilling.
  */
 export default function RootLayout({
   children,
@@ -18,7 +19,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }
