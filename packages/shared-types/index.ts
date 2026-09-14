@@ -80,6 +80,8 @@ export const SocketEvents = {
   CARD_CREATED: "card:created",
   CARD_UPDATED: "card:updated",
   CARD_DELETED: "card:deleted",
+  LIST_CREATED: "list:created",
+  LIST_DELETED: "list:deleted",
   LIST_REORDERED: "list:reordered",
   COMMENT_ADDED: "comment:added",
 } as const;
