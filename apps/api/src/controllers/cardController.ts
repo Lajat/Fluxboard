@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { CardModel } from "../models/Card";
 import { ListModel } from "../models/List";
 import type { Card } from "@fluxboard/shared-types";
+import { SocketEvents } from "@fluxboard/shared-types";
 
 /**
  * Converts a Mongoose CardDocument into the plain `Card` shape defined in
@@ -46,7 +47,16 @@ export async function createCard(req: Request, res: Response) {
   list.cardOrder.push(card._id);
   await list.save();
 
-  res.status(201).json(toCardResponse(card));
+  const cardResponse = toCardResponse(card);
+
+  // Broadcast to everyone else looking at this board (see index.ts for
+  // where req.app "io" is set, and List.boardId for how we know which
+  // board this list belongs to). The creating client already has this
+  // card in its own state from the HTTP response below, so this event is
+  // really for OTHER open tabs/browsers.
+  req.app.get("io").to(`board:${list.boardId}`).emit(SocketEvents.CARD_CREATED, cardResponse);
+
+  res.status(201).json(cardResponse);
 }
 
 /**
@@ -100,11 +110,20 @@ export async function deleteCard(req: Request, res: Response) {
     return res.status(404).json({ error: "card not found" });
   }
 
-  await ListModel.findByIdAndUpdate(card.listId, {
+  const list = await ListModel.findByIdAndUpdate(card.listId, {
     $pull: { cardOrder: card._id },
   });
 
-  res.json({ deleted: toCardResponse(card) });
+  const cardResponse = toCardResponse(card);
+
+  if (list) {
+    req.app.get("io").to(`board:${list.boardId}`).emit(SocketEvents.CARD_DELETED, {
+      cardId: cardResponse.id,
+      listId: cardResponse.listId,
+    });
+  }
+
+  res.json({ deleted: cardResponse });
 }
 
 /**
@@ -146,6 +165,14 @@ export async function moveCard(req: Request, res: Response) {
   // (e.g. listCardsForList) filters by, so both must stay in sync.
   card.listId = toListId;
   await card.save();
+
+  req.app.get("io").to(`board:${destinationList.boardId}`).emit(SocketEvents.CARD_MOVED, {
+    cardId: card._id.toString(),
+    fromListId,
+    toListId,
+    newIndex,
+    movedBy: req.userId,
+  });
 
   res.json(toCardResponse(card));
 }

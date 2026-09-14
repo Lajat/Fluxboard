@@ -4,6 +4,7 @@ import { BoardModel } from "../models/Board";
 import { WorkspaceModel } from "../models/Workspace";
 import { CardModel } from "../models/Card";
 import type { List } from "@fluxboard/shared-types";
+import { SocketEvents } from "@fluxboard/shared-types";
 
 /** Converts a Mongoose ListDocument into the shared `List` shape. */
 function toListResponse(doc: any): List {
@@ -54,7 +55,10 @@ export async function createList(req: Request, res: Response) {
     $push: { listOrder: list._id },
   });
 
-  res.status(201).json(toListResponse(list));
+  const listResponse = toListResponse(list);
+  req.app.get("io").to(`board:${boardId}`).emit(SocketEvents.LIST_CREATED, listResponse);
+
+  res.status(201).json(listResponse);
 }
 
 /**
@@ -110,7 +114,14 @@ export async function reorderLists(req: Request, res: Response) {
   // Returning the board's new listOrder directly (not wrapped in
   // toListResponse, which is for individual List documents, not this) —
   // this is the one thing the frontend actually needs after a reorder.
-  res.json({ boardId, listOrder: board.listOrder.map((id: any) => id.toString()) });
+  const newListOrder = board.listOrder.map((id: any) => id.toString());
+
+  req.app.get("io").to(`board:${boardId}`).emit(SocketEvents.LIST_REORDERED, {
+    boardId,
+    listOrder: newListOrder,
+  });
+
+  res.json({ boardId, listOrder: newListOrder });
 }
 
 /**
@@ -135,5 +146,11 @@ export async function deleteList(req: Request, res: Response) {
     $pull: { listOrder: listId },
   });
 
-  res.json({ deleted: toListResponse(list) });
+  const listResponse = toListResponse(list);
+  req.app.get("io").to(`board:${boardId}`).emit(SocketEvents.LIST_DELETED, {
+    listId: listResponse.id,
+    boardId,
+  });
+
+  res.json({ deleted: listResponse });
 }

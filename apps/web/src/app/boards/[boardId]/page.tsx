@@ -15,9 +15,11 @@ import {
 } from "@dnd-kit/core";
 import { useAuth } from "@/context/AuthContext";
 import { apiFetch, ApiError } from "@/lib/apiClient";
+import { getSocket } from "@/lib/socket";
 import { BoardColumn } from "@/components/BoardColumn";
 import { TaskCard } from "@/components/TaskCard";
 import type { Board, List, Card } from "@fluxboard/shared-types";
+import { SocketEvents, type CardMovedPayload } from "@fluxboard/shared-types";
 
 /**
  * Local shape for a list plus its resolved cards, in on-screen order.
@@ -58,6 +60,83 @@ export default function BoardPage() {
     loadBoard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, boardId]);
+
+  // Real-time sync: join this board's room and apply events from OTHER
+  // clients (and, harmlessly, our own — every handler below is written to
+  // be idempotent, so re-applying an event we already reflected locally
+  // via optimistic UI just re-does the same no-op change).
+  useEffect(() => {
+    const socket = getSocket();
+    socket.emit("join-board", boardId);
+
+    function upsertCard(card: Card) {
+      setCardsById((prev) => ({ ...prev, [card.id]: card }));
+      setLists((prev) =>
+        prev.map((list) =>
+          list.id === card.listId && !list.cardOrder.includes(card.id)
+            ? { ...list, cardOrder: [...list.cardOrder, card.id] }
+            : list
+        )
+      );
+    }
+
+    function handleCardDeleted({ cardId }: { cardId: string; listId: string }) {
+      setCardsById((prev) => {
+        const next = { ...prev };
+        delete next[cardId];
+        return next;
+      });
+      setLists((prev) =>
+        prev.map((list) => ({ ...list, cardOrder: list.cardOrder.filter((id) => id !== cardId) }))
+      );
+    }
+
+    function handleCardMoved({ cardId, toListId, newIndex }: CardMovedPayload) {
+      setLists((prev) => {
+        const next = prev.map((l) => ({ ...l, cardOrder: l.cardOrder.filter((id) => id !== cardId) }));
+        const dest = next.find((l) => l.id === toListId);
+        if (dest) dest.cardOrder.splice(newIndex, 0, cardId);
+        return next;
+      });
+      setCardsById((prev) =>
+        prev[cardId] ? { ...prev, [cardId]: { ...prev[cardId], listId: toListId } } : prev
+      );
+    }
+
+    function handleListCreated(list: List) {
+      setLists((prev) =>
+        prev.some((l) => l.id === list.id) ? prev : [...prev, { ...list, cardOrder: list.cardOrder }]
+      );
+    }
+
+    function handleListDeleted({ listId }: { listId: string; boardId: string }) {
+      setLists((prev) => prev.filter((l) => l.id !== listId));
+    }
+
+    function handleListReordered({ listOrder }: { boardId: string; listOrder: string[] }) {
+      setLists((prev) => {
+        const byId = new Map(prev.map((l) => [l.id, l]));
+        return listOrder.map((id) => byId.get(id)).filter((l): l is ListWithCards => !!l);
+      });
+    }
+
+    socket.on(SocketEvents.CARD_CREATED, upsertCard);
+    socket.on(SocketEvents.CARD_DELETED, handleCardDeleted);
+    socket.on(SocketEvents.CARD_MOVED, handleCardMoved);
+    socket.on(SocketEvents.LIST_CREATED, handleListCreated);
+    socket.on(SocketEvents.LIST_DELETED, handleListDeleted);
+    socket.on(SocketEvents.LIST_REORDERED, handleListReordered);
+
+    return () => {
+      socket.emit("leave-board", boardId);
+      socket.off(SocketEvents.CARD_CREATED, upsertCard);
+      socket.off(SocketEvents.CARD_DELETED, handleCardDeleted);
+      socket.off(SocketEvents.CARD_MOVED, handleCardMoved);
+      socket.off(SocketEvents.LIST_CREATED, handleListCreated);
+      socket.off(SocketEvents.LIST_DELETED, handleListDeleted);
+      socket.off(SocketEvents.LIST_REORDERED, handleListReordered);
+    };
+  }, [boardId]);
 
   /** Fetches the board, its lists, and every list's cards, then flattens cards into one lookup map. */
   async function loadBoard() {
@@ -100,7 +179,9 @@ export default function BoardPage() {
         accessToken,
         body: { title: newListTitle },
       });
-      setLists((prev) => [...prev, { ...created, cardOrder: [] }]);
+      // Same guard as handleAddCard above — LIST_CREATED can arrive over
+      // the socket before this HTTP response resolves.
+      setLists((prev) => (prev.some((l) => l.id === created.id) ? prev : [...prev, { ...created, cardOrder: [] }]));
       setNewListTitle("");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to create list");
@@ -115,9 +196,16 @@ export default function BoardPage() {
         body: { title },
       });
       setCardsById((prev) => ({ ...prev, [created.id]: created }));
+      // Guarded the same way the socket CARD_CREATED handler is — the
+      // real-time event for this exact card can arrive over the socket
+      // BEFORE this HTTP response resolves (they race independently), so
+      // without this check the card gets appended twice in the tab that
+      // created it: once from the socket event, once from here.
       setLists((prev) =>
         prev.map((list) =>
-          list.id === listId ? { ...list, cardOrder: [...list.cardOrder, created.id] } : list
+          list.id === listId && !list.cardOrder.includes(created.id)
+            ? { ...list, cardOrder: [...list.cardOrder, created.id] }
+            : list
         )
       );
     } catch (err) {

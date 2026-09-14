@@ -41,15 +41,26 @@ const io = new SocketIOServer(httpServer, {
 io.on("connection", (socket) => {
   console.log(`[socket] client connected: ${socket.id}`);
 
+  // Clients join a per-board "room" so events only reach people actually
+  // looking at that board, not every connected client on the whole app.
+  socket.on("join-board", (boardId: string) => {
+    socket.join(`board:${boardId}`);
+  });
+
+  socket.on("leave-board", (boardId: string) => {
+    socket.leave(`board:${boardId}`);
+  });
+
   socket.on("disconnect", () => {
     console.log(`[socket] client disconnected: ${socket.id}`);
   });
-
-  // Real-time event handlers (card:moved, comment:added, etc.) get
-  // registered here as the app grows — kept minimal for now since this is
-  // an early scaffold; see packages/shared-types for the event names these
-  // handlers will use once built.
 });
+
+// Stored on the Express app so REST controllers (which don't otherwise
+// have access to the socket server) can reach it via req.app.get("io") to
+// broadcast an event after a mutation — e.g. cardController emits
+// CARD_MOVED after persisting a drag-and-drop move to the database.
+app.set("io", io);
 
 connectToDatabase()
   .then(() => {

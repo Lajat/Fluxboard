@@ -5,6 +5,8 @@
   "description": "Real-time collaborative Kanban board — Next.js + Node/Express + MongoDB + Socket.io",
   "scripts": {
     "dev": "turbo run dev",
+    "dev:api": "pnpm --filter @fluxboard/api dev",
+    "dev:web": "pnpm --filter @fluxboard/web dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
     "test": "turbo run test"
