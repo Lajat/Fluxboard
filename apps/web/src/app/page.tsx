@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
+import { SpinnerIcon } from "@/components/ui/icons";
 
 /**
  * The home page has no content of its own — it just routes the visitor
@@ -20,8 +21,8 @@ export default function HomePage() {
   }, [user, isLoading, router]);
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gray-50">
-      <p className="text-gray-400">Loading...</p>
+    <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-50 via-slate-50 to-slate-50">
+      <SpinnerIcon className="h-6 w-6 text-brand-500" />
     </main>
   );
 }

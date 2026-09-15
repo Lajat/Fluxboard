@@ -4,95 +4,170 @@ import { useState, FormEvent } from "react";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { ApiError } from "@/lib/apiClient";
+import { emailError as getEmailError, passwordError as getPasswordError } from "@/lib/validation";
+import { LayoutIcon, SpinnerIcon, CheckIcon } from "@/components/ui/icons";
+
+type Touched = { displayName?: boolean; email?: boolean; password?: boolean; confirmPassword?: boolean };
 
 export default function SignupPage() {
   const { signup } = useAuth();
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [touched, setTouched] = useState<Touched>({});
+  const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const nameErr = !displayName.trim() ? "Name is required." : null;
+  const emailErr = getEmailError(email);
+  const passwordErr = getPasswordError(password);
+  const confirmErr =
+    confirmPassword !== password ? "Passwords don't match." : null;
+  const isFormValid = !nameErr && !emailErr && !passwordErr && !confirmErr;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setError(null);
+    setTouched({ displayName: true, email: true, password: true, confirmPassword: true });
+    setFormError(null);
+    if (!isFormValid) return;
+
     setIsSubmitting(true);
     try {
-      await signup(email, password, displayName);
+      await signup(email, password, displayName.trim());
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong. Please try again.");
+      setFormError(
+        err instanceof ApiError ? err.message : "Something went wrong. Please try again."
+      );
     } finally {
       setIsSubmitting(false);
     }
   }
 
+  function fieldClass(hasError: boolean) {
+    return `mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 ${
+      hasError
+        ? "border-red-300 focus:border-red-400 focus:ring-red-100"
+        : "border-slate-200 focus:border-brand-400 focus:ring-brand-100"
+    }`;
+  }
+
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gray-50">
-      <div className="w-full max-w-sm rounded-lg bg-white p-8 shadow-sm">
-        <h1 className="mb-6 text-2xl font-bold text-gray-900">Create your fluxboard account</h1>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="displayName" className="block text-sm font-medium text-gray-700">
-              Name
-            </label>
-            <input
-              id="displayName"
-              type="text"
-              required
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
-            />
+    <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-50 via-slate-50 to-slate-50 px-4 py-10">
+      <div className="w-full max-w-sm">
+        <div className="mb-6 flex flex-col items-center gap-2">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-sm">
+            <LayoutIcon className="h-6 w-6" />
           </div>
+          <span className="text-sm font-semibold tracking-tight text-slate-400">fluxboard</span>
+        </div>
 
-          <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-              Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
-            />
-          </div>
+        <div className="rounded-2xl bg-white p-8 shadow-sm ring-1 ring-slate-100">
+          <h1 className="mb-6 text-xl font-bold text-slate-900">Create your account</h1>
 
-          <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-              Password
-            </label>
-            <input
-              id="password"
-              type="password"
-              required
-              minLength={8}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
-            />
-            <p className="mt-1 text-xs text-gray-400">At least 8 characters.</p>
-          </div>
+          <form onSubmit={handleSubmit} noValidate className="space-y-4">
+            <div>
+              <label htmlFor="displayName" className="block text-sm font-medium text-slate-700">
+                Name
+              </label>
+              <input
+                id="displayName"
+                type="text"
+                autoComplete="name"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                onBlur={() => setTouched((t) => ({ ...t, displayName: true }))}
+                aria-invalid={touched.displayName && !!nameErr}
+                className={fieldClass(!!(touched.displayName && nameErr))}
+              />
+              {touched.displayName && nameErr && (
+                <p className="mt-1 text-xs text-red-600">{nameErr}</p>
+              )}
+            </div>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium text-slate-700">
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onBlur={() => setTouched((t) => ({ ...t, email: true }))}
+                aria-invalid={touched.email && !!emailErr}
+                className={fieldClass(!!(touched.email && emailErr))}
+              />
+              {touched.email && emailErr && <p className="mt-1 text-xs text-red-600">{emailErr}</p>}
+            </div>
 
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full rounded-md bg-gray-900 px-4 py-2 text-white transition hover:bg-gray-800 disabled:opacity-50"
-          >
-            {isSubmitting ? "Creating account..." : "Sign up"}
-          </button>
-        </form>
+            <div>
+              <label htmlFor="password" className="block text-sm font-medium text-slate-700">
+                Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onBlur={() => setTouched((t) => ({ ...t, password: true }))}
+                aria-invalid={touched.password && !!passwordErr}
+                className={fieldClass(!!(touched.password && passwordErr))}
+              />
+              {/* Live checklist instead of a static hint — gives immediate,
+                  encouraging feedback as the user types rather than only
+                  showing red text after they've already failed. */}
+              <p
+                className={`mt-1 flex items-center gap-1 text-xs ${
+                  password.length >= 8 ? "text-emerald-600" : "text-slate-400"
+                }`}
+              >
+                <CheckIcon className="h-3 w-3" /> At least 8 characters
+              </p>
+            </div>
 
-        <p className="mt-4 text-center text-sm text-gray-500">
-          Already have an account?{" "}
-          <Link href="/login" className="text-blue-600 hover:underline">
-            Log in
-          </Link>
-        </p>
+            <div>
+              <label htmlFor="confirmPassword" className="block text-sm font-medium text-slate-700">
+                Confirm password
+              </label>
+              <input
+                id="confirmPassword"
+                type="password"
+                autoComplete="new-password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                onBlur={() => setTouched((t) => ({ ...t, confirmPassword: true }))}
+                aria-invalid={touched.confirmPassword && !!confirmErr}
+                className={fieldClass(!!(touched.confirmPassword && confirmErr))}
+              />
+              {touched.confirmPassword && confirmErr && (
+                <p className="mt-1 text-xs text-red-600">{confirmErr}</p>
+              )}
+            </div>
+
+            {formError && (
+              <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{formError}</p>
+            )}
+
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-50"
+            >
+              {isSubmitting && <SpinnerIcon className="h-4 w-4" />}
+              {isSubmitting ? "Creating account..." : "Sign up"}
+            </button>
+          </form>
+
+          <p className="mt-5 text-center text-sm text-slate-500">
+            Already have an account?{" "}
+            <Link href="/login" className="font-medium text-brand-600 hover:text-brand-700">
+              Log in
+            </Link>
+          </p>
+        </div>
       </div>
     </main>
   );

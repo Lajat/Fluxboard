@@ -18,6 +18,8 @@ function toCardResponse(doc: any): Card {
     title: doc.title,
     description: doc.description,
     assigneeId: doc.assigneeId?.toString(),
+    dueDate: doc.dueDate?.toISOString(),
+    labels: doc.labels ?? [],
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString(),
   };
@@ -29,7 +31,7 @@ function toCardResponse(doc: any): Card {
  */
 export async function createCard(req: Request, res: Response) {
   const { listId } = req.params;
-  const { title, description } = req.body;
+  const { title, description, dueDate, labels } = req.body;
 
   if (!title) {
     return res.status(400).json({ error: "title is required" });
@@ -40,7 +42,7 @@ export async function createCard(req: Request, res: Response) {
     return res.status(404).json({ error: "list not found" });
   }
 
-  const card = await CardModel.create({ listId, title, description });
+  const card = await CardModel.create({ listId, title, description, dueDate, labels });
 
   // Keep the list's cardOrder in sync — this array is the source of truth
   // for on-screen ordering, so every card creation/deletion must update it.
@@ -77,17 +79,24 @@ export async function listCardsForList(req: Request, res: Response) {
 
 /**
  * PATCH /cards/:cardId
- * Updates a card's title/description. Does not handle moving a card
- * between lists — that's a separate endpoint (moveCard) because it also
- * needs to update two lists' cardOrder arrays, not just the card itself.
+ * Updates a card's title/description/dueDate/labels. Does not handle
+ * moving a card between lists — that's a separate endpoint (moveCard)
+ * because it also needs to update two lists' cardOrder arrays, not just
+ * the card itself.
  */
 export async function updateCard(req: Request, res: Response) {
   const { cardId } = req.params;
-  const { title, description } = req.body;
+  const { title, description, dueDate, labels } = req.body;
 
   const card = await CardModel.findByIdAndUpdate(
     cardId,
-    { ...(title !== undefined && { title }), ...(description !== undefined && { description }) },
+    {
+      ...(title !== undefined && { title }),
+      ...(description !== undefined && { description }),
+      // Allow explicitly clearing dueDate by passing null.
+      ...(dueDate !== undefined && { dueDate: dueDate || undefined }),
+      ...(labels !== undefined && { labels }),
+    },
     { new: true } // return the updated document, not the pre-update one
   );
 
@@ -95,7 +104,16 @@ export async function updateCard(req: Request, res: Response) {
     return res.status(404).json({ error: "card not found" });
   }
 
-  res.json(toCardResponse(card));
+  const cardResponse = toCardResponse(card);
+
+  // Look up the list to find which board's room to broadcast to — the
+  // card itself only knows its listId, not the boardId.
+  const list = await ListModel.findById(card.listId);
+  if (list) {
+    req.app.get("io").to(`board:${list.boardId}`).emit(SocketEvents.CARD_UPDATED, cardResponse);
+  }
+
+  res.json(cardResponse);
 }
 
 /**

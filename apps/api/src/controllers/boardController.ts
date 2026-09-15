@@ -88,6 +88,40 @@ export async function getBoard(req: Request, res: Response) {
 }
 
 /**
+ * PATCH /boards/:boardId
+ * Renames a board. Only title is editable here — moving a board between
+ * workspaces isn't supported, so workspaceId is intentionally never
+ * accepted from the request body.
+ */
+export async function updateBoard(req: Request, res: Response) {
+  const { boardId } = req.params;
+  const { title } = req.body;
+
+  if (!title || !title.trim()) {
+    return res.status(400).json({ error: "title is required" });
+  }
+
+  const board = await BoardModel.findById(boardId);
+  if (!board) {
+    return res.status(404).json({ error: "board not found" });
+  }
+
+  const isMember = await assertWorkspaceMember(board.workspaceId.toString(), req.userId!);
+  if (!isMember) {
+    return res.status(404).json({ error: "board not found" });
+  }
+
+  board.title = title;
+  await board.save();
+
+  // Note: board rename isn't broadcast over sockets — unlike lists/cards,
+  // there's no per-workspace socket room today (only per-board), and board
+  // titles aren't shown on any screen two people are likely to have open
+  // at the same moment. A simple refetch-on-navigate is enough here.
+  res.json(toBoardResponse(board));
+}
+
+/**
  * DELETE /boards/:boardId
  * Deletes a board and cascades: every List in the board, and every Card in
  * those lists, is deleted too — a board should never leave orphaned lists
