@@ -4,79 +4,126 @@ import { useState, FormEvent } from "react";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { ApiError } from "@/lib/apiClient";
+import { emailError as getEmailError } from "@/lib/validation";
+import { LayoutIcon, SpinnerIcon } from "@/components/ui/icons";
+
+type Touched = { email?: boolean; password?: boolean };
 
 export default function LoginPage() {
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [touched, setTouched] = useState<Touched>({});
+  const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Field-level validation, recomputed on every render from current
+  // values — cheap for a two-field form, and means the error under each
+  // input is always in sync with what's typed, not just checked on submit.
+  const emailErr = getEmailError(email);
+  const passwordErr = !password ? "Password is required." : null;
+  const isFormValid = !emailErr && !passwordErr;
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    setError(null);
+    setTouched({ email: true, password: true });
+    setFormError(null);
+    if (!isFormValid) return;
+
     setIsSubmitting(true);
     try {
       await login(email, password);
       // useAuth's login() already redirects to /workspaces on success.
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Something went wrong. Please try again.");
+      setFormError(
+        err instanceof ApiError ? err.message : "Something went wrong. Please try again."
+      );
     } finally {
       setIsSubmitting(false);
     }
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-gray-50">
-      <div className="w-full max-w-sm rounded-lg bg-white p-8 shadow-sm">
-        <h1 className="mb-6 text-2xl font-bold text-gray-900">Log in to fluxboard</h1>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-              Email
-            </label>
-            <input
-              id="email"
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
-            />
+    <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-50 via-slate-50 to-slate-50 px-4">
+      <div className="w-full max-w-sm">
+        <div className="mb-6 flex flex-col items-center gap-2">
+          <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-sm">
+            <LayoutIcon className="h-6 w-6" />
           </div>
+          <span className="text-sm font-semibold tracking-tight text-slate-400">Fluxboard</span>
+        </div>
 
-          <div>
-            <label htmlFor="password" className="block text-sm font-medium text-gray-700">
-              Password
-            </label>
-            <input
-              id="password"
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
-            />
-          </div>
+        <div className="rounded-2xl bg-white p-8 shadow-sm ring-1 ring-slate-100">
+          <h1 className="mb-6 text-xl font-bold text-slate-900">Welcome back</h1>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          <form onSubmit={handleSubmit} noValidate className="space-y-4">
+            <div>
+              <label htmlFor="email" className="block text-sm font-medium text-slate-700">
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onBlur={() => setTouched((t) => ({ ...t, email: true }))}
+                aria-invalid={touched.email && !!emailErr}
+                className={`mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 ${
+                  touched.email && emailErr
+                    ? "border-red-300 focus:border-red-400 focus:ring-red-100"
+                    : "border-slate-200 focus:border-brand-400 focus:ring-brand-100"
+                }`}
+              />
+              {touched.email && emailErr && (
+                <p className="mt-1 text-xs text-red-600">{emailErr}</p>
+              )}
+            </div>
 
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full rounded-md bg-gray-900 px-4 py-2 text-white transition hover:bg-gray-800 disabled:opacity-50"
-          >
-            {isSubmitting ? "Logging in..." : "Log in"}
-          </button>
-        </form>
+            <div>
+              <label htmlFor="password" className="block text-sm font-medium text-slate-700">
+                Password
+              </label>
+              <input
+                id="password"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                onBlur={() => setTouched((t) => ({ ...t, password: true }))}
+                aria-invalid={touched.password && !!passwordErr}
+                className={`mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 ${
+                  touched.password && passwordErr
+                    ? "border-red-300 focus:border-red-400 focus:ring-red-100"
+                    : "border-slate-200 focus:border-brand-400 focus:ring-brand-100"
+                }`}
+              />
+              {touched.password && passwordErr && (
+                <p className="mt-1 text-xs text-red-600">{passwordErr}</p>
+              )}
+            </div>
 
-        <p className="mt-4 text-center text-sm text-gray-500">
-          Don&apos;t have an account?{" "}
-          <Link href="/signup" className="text-blue-600 hover:underline">
-            Sign up
-          </Link>
-        </p>
+            {formError && (
+              <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{formError}</p>
+            )}
+
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-50"
+            >
+              {isSubmitting && <SpinnerIcon className="h-4 w-4" />}
+              {isSubmitting ? "Logging in..." : "Log in"}
+            </button>
+          </form>
+
+          <p className="mt-5 text-center text-sm text-slate-500">
+            Don&apos;t have an account?{" "}
+            <Link href="/signup" className="font-medium text-brand-600 hover:text-brand-700">
+              Sign up
+            </Link>
+          </p>
+        </div>
       </div>
     </main>
   );

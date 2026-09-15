@@ -82,6 +82,44 @@ export async function listListsForBoard(req: Request, res: Response) {
 }
 
 /**
+ * PATCH /boards/:boardId/lists/:listId
+ * Renames a list. Kept as its own endpoint (distinct from
+ * /lists/reorder above) since the two are triggered by completely
+ * different UI actions — one from a drag-and-drop drop, one from an
+ * inline rename field — and mixing "reorder the whole board" with
+ * "rename one list" into a single handler would make both harder to
+ * reason about.
+ */
+export async function updateList(req: Request, res: Response) {
+  const { boardId, listId } = req.params;
+  const { title } = req.body;
+
+  if (!title || !title.trim()) {
+    return res.status(400).json({ error: "title is required" });
+  }
+
+  const hasAccess = await assertBoardAccess(boardId, req.userId!);
+  if (!hasAccess) {
+    return res.status(404).json({ error: "board not found" });
+  }
+
+  const list = await ListModel.findOneAndUpdate(
+    { _id: listId, boardId },
+    { title },
+    { new: true }
+  );
+
+  if (!list) {
+    return res.status(404).json({ error: "list not found" });
+  }
+
+  const listResponse = toListResponse(list);
+  req.app.get("io").to(`board:${boardId}`).emit(SocketEvents.LIST_UPDATED, listResponse);
+
+  res.json(listResponse);
+}
+
+/**
  * PATCH /boards/:boardId/lists/reorder
  * Replaces the board's listOrder wholesale with a new array of list ids.
  * Used after a drag-and-drop reorder on the frontend — simpler and less

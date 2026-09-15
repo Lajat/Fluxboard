@@ -56,9 +56,25 @@ export interface Card {
   title: string;
   description?: string;
   assigneeId?: string; // User.id, if assigned
+  dueDate?: string; // ISO 8601 timestamp, if set
+  labels?: string[]; // color keywords, e.g. ["green", "red"]
   createdAt: string;
   updatedAt: string;
 }
+
+/** Color keywords available for card labels, in display order. */
+export const LABEL_COLORS = [
+  "gray",
+  "red",
+  "orange",
+  "yellow",
+  "green",
+  "teal",
+  "blue",
+  "purple",
+  "pink",
+] as const;
+export type LabelColor = (typeof LABEL_COLORS)[number];
 
 /** A comment left on a card, used for the activity/discussion trail. */
 export interface Comment {
@@ -81,8 +97,13 @@ export const SocketEvents = {
   CARD_UPDATED: "card:updated",
   CARD_DELETED: "card:deleted",
   LIST_CREATED: "list:created",
+  LIST_UPDATED: "list:updated",
   LIST_DELETED: "list:deleted",
   LIST_REORDERED: "list:reordered",
+  BOARD_UPDATED: "board:updated",
+  BOARD_DELETED: "board:deleted",
+  WORKSPACE_UPDATED: "workspace:updated",
+  WORKSPACE_DELETED: "workspace:deleted",
   COMMENT_ADDED: "comment:added",
 } as const;
 

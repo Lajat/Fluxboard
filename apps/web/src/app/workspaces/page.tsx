@@ -4,17 +4,24 @@ import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/components/ui/Toast";
 import { apiFetch, ApiError } from "@/lib/apiClient";
+import { EditableTitle } from "@/components/ui/EditableTitle";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { FolderIcon, LogOutIcon, PlusIcon, TrashIcon, SpinnerIcon } from "@/components/ui/icons";
 import type { Workspace } from "@fluxboard/shared-types";
 
 export default function WorkspacesPage() {
   const { user, accessToken, isLoading: authLoading, logout } = useAuth();
+  const { showToast } = useToast();
   const router = useRouter();
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(true);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [deletingWorkspace, setDeletingWorkspace] = useState<Workspace | null>(null);
 
   // Redirect to login if not authenticated — this page requires a user.
   useEffect(() => {
@@ -28,13 +35,19 @@ export default function WorkspacesPage() {
 
     apiFetch<{ items: Workspace[] }>("/workspaces", { accessToken })
       .then((res) => setWorkspaces(res.items))
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Failed to load workspaces"))
+      .catch((err) =>
+        showToast(err instanceof ApiError ? err.message : "Failed to load workspaces", "error")
+      )
       .finally(() => setIsLoadingWorkspaces(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
   async function handleCreateWorkspace(e: FormEvent) {
     e.preventDefault();
-    if (!newWorkspaceName.trim()) return;
+    if (!newWorkspaceName.trim()) {
+      setCreateError("Workspace name is required.");
+      return;
+    }
 
     try {
       const created = await apiFetch<Workspace>("/workspaces", {
@@ -44,66 +57,175 @@ export default function WorkspacesPage() {
       });
       setWorkspaces((prev) => [...prev, created]);
       setNewWorkspaceName("");
+      setIsCreating(false);
+      setCreateError(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Failed to create workspace");
+      showToast(err instanceof ApiError ? err.message : "Failed to create workspace", "error");
+    }
+  }
+
+  async function handleRenameWorkspace(workspaceId: string, name: string) {
+    try {
+      const updated = await apiFetch<Workspace>(`/workspaces/${workspaceId}`, {
+        method: "PATCH",
+        accessToken,
+        body: { name },
+      });
+      setWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? updated : ws)));
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : "Failed to rename workspace", "error");
+    }
+  }
+
+  async function handleDeleteWorkspace() {
+    if (!deletingWorkspace) return;
+    try {
+      await apiFetch(`/workspaces/${deletingWorkspace.id}`, { method: "DELETE", accessToken });
+      setWorkspaces((prev) => prev.filter((ws) => ws.id !== deletingWorkspace.id));
+      showToast("Workspace deleted");
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : "Failed to delete workspace", "error");
+    } finally {
+      setDeletingWorkspace(null);
     }
   }
 
   if (authLoading || !user) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-gray-50">
-        <p className="text-gray-400">Loading...</p>
+      <main className="flex min-h-screen items-center justify-center bg-slate-50">
+        <SpinnerIcon className="h-6 w-6 text-brand-500" />
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-gray-50 px-6 py-10">
-      <div className="mx-auto max-w-2xl">
-        <div className="mb-8 flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-900">Your workspaces</h1>
-          <button onClick={logout} className="text-sm text-gray-500 hover:text-gray-800">
-            Log out ({user.displayName})
+    <main className="min-h-screen bg-gradient-to-b from-brand-50 via-slate-50 to-slate-50">
+      <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
+        <div className="mb-8 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-sm">
+              <FolderIcon className="h-5 w-5" />
+            </div>
+            <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">Your workspaces</h1>
+          </div>
+          <button
+            onClick={logout}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-500 hover:bg-white hover:text-slate-800 hover:shadow-sm"
+          >
+            <LogOutIcon className="h-4 w-4" />
+            <span className="hidden sm:inline">Log out</span>
           </button>
         </div>
 
-        <form onSubmit={handleCreateWorkspace} className="mb-8 flex gap-2">
-          <input
-            type="text"
-            placeholder="New workspace name"
-            value={newWorkspaceName}
-            onChange={(e) => setNewWorkspaceName(e.target.value)}
-            className="flex-1 rounded-md border border-gray-300 px-3 py-2 focus:border-blue-500 focus:outline-none"
-          />
-          <button
-            type="submit"
-            className="rounded-md bg-gray-900 px-4 py-2 text-white hover:bg-gray-800"
-          >
-            Create
-          </button>
-        </form>
-
-        {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
+        <p className="mb-6 text-sm text-slate-500">
+          Signed in as <span className="font-medium text-slate-700">{user.displayName}</span>
+        </p>
 
         {isLoadingWorkspaces ? (
-          <p className="text-gray-400">Loading workspaces...</p>
-        ) : workspaces.length === 0 ? (
-          <p className="text-gray-400">No workspaces yet — create one above to get started.</p>
+          <div className="flex justify-center py-16">
+            <SpinnerIcon className="h-6 w-6 text-brand-400" />
+          </div>
         ) : (
-          <ul className="space-y-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {workspaces.map((ws) => (
-              <li key={ws.id}>
-                <Link
-                  href={`/workspaces/${ws.id}`}
-                  className="block rounded-md border border-gray-200 bg-white px-4 py-3 hover:border-gray-300 hover:shadow-sm"
-                >
-                  {ws.name}
+              <div
+                key={ws.id}
+                className="group relative rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-brand-200 hover:shadow-md"
+              >
+                <Link href={`/workspaces/${ws.id}`} className="block">
+                  <div className="mb-1 flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+                    <FolderIcon className="h-4 w-4" />
+                  </div>
+                  <div className="mt-2 pr-8">
+                    <EditableTitle
+                      as="h2"
+                      value={ws.name}
+                      onSave={(next) => handleRenameWorkspace(ws.id, next)}
+                      className="font-semibold text-slate-900"
+                    />
+                  </div>
+                  <p className="mt-0.5 text-xs text-slate-400">
+                    {ws.memberIds.length} member{ws.memberIds.length === 1 ? "" : "s"}
+                  </p>
                 </Link>
-              </li>
+                <button
+                  onClick={() => setDeletingWorkspace(ws)}
+                  aria-label={`Delete ${ws.name}`}
+                  className="absolute right-3 top-3 rounded-md p-1.5 text-slate-300 opacity-100 hover:bg-red-50 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100"
+                >
+                  <TrashIcon className="h-4 w-4" />
+                </button>
+              </div>
             ))}
-          </ul>
+
+            {isCreating ? (
+              <form
+                onSubmit={handleCreateWorkspace}
+                className="flex flex-col justify-center rounded-xl border-2 border-dashed border-brand-300 bg-brand-50/50 p-4"
+              >
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="Workspace name"
+                  value={newWorkspaceName}
+                  onChange={(e) => {
+                    setNewWorkspaceName(e.target.value);
+                    if (createError) setCreateError(null);
+                  }}
+                  onKeyDown={(e) => e.key === "Escape" && setIsCreating(false)}
+                  aria-invalid={!!createError}
+                  className={`w-full rounded-lg border bg-white px-3 py-2 text-sm outline-none ring-2 ${
+                    createError
+                      ? "border-red-300 ring-red-100"
+                      : "border-brand-300 ring-brand-100"
+                  }`}
+                />
+                {createError && <p className="mt-1 text-xs text-red-600">{createError}</p>}
+                <div className="mt-2 flex gap-2">
+                  <button
+                    type="submit"
+                    className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
+                  >
+                    Create
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCreating(false);
+                      setCreateError(null);
+                    }}
+                    className="rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-white"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <button
+                onClick={() => setIsCreating(true)}
+                className="flex min-h-[104px] flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 text-sm text-slate-400 hover:border-brand-300 hover:bg-white hover:text-brand-600"
+              >
+                <PlusIcon className="h-5 w-5" />
+                New workspace
+              </button>
+            )}
+          </div>
+        )}
+
+        {!isLoadingWorkspaces && workspaces.length === 0 && !isCreating && (
+          <p className="mt-4 text-center text-sm text-slate-400">
+            No workspaces yet — create one above to get started.
+          </p>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!deletingWorkspace}
+        title="Delete this workspace?"
+        description={`"${deletingWorkspace?.name}" and every board, list, and card inside it will be permanently deleted for all members.`}
+        onCancel={() => setDeletingWorkspace(null)}
+        onConfirm={handleDeleteWorkspace}
+      />
     </main>
   );
 }
