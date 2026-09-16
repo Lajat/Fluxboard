@@ -30,6 +30,21 @@ export interface Workspace {
   createdAt: string;
 }
 
+/**
+ * A workspace member with enough profile info to render an avatar/name —
+ * returned by GET /workspaces/:id/members, which populates the bare
+ * `memberIds` on Workspace into this richer shape. Kept as a separate type
+ * (rather than putting this on Workspace itself) because most places that
+ * fetch a Workspace don't need every member's profile, just the id list.
+ */
+export interface WorkspaceMember {
+  id: string;
+  email: string;
+  displayName: string;
+  avatarUrl?: string;
+  role: "owner" | "member";
+}
+
 /** A single Kanban board that lives inside a workspace. */
 export interface Board {
   id: string;
@@ -100,10 +115,18 @@ export const SocketEvents = {
   LIST_UPDATED: "list:updated",
   LIST_DELETED: "list:deleted",
   LIST_REORDERED: "list:reordered",
+  BOARD_CREATED: "board:created",
   BOARD_UPDATED: "board:updated",
   BOARD_DELETED: "board:deleted",
   WORKSPACE_UPDATED: "workspace:updated",
   WORKSPACE_DELETED: "workspace:deleted",
+  MEMBER_ADDED: "workspace:member-added",
+  MEMBER_REMOVED: "workspace:member-removed",
+  // Sent to a specific removed user's personal room ONLY (not the whole
+  // workspace room the way MEMBER_REMOVED is) — the one signal a client
+  // needs to immediately back out of a workspace/board it's currently
+  // looking at, rather than finding out the hard way on its next request.
+  ACCESS_REVOKED: "workspace:access-revoked",
   COMMENT_ADDED: "comment:added",
 } as const;
 
@@ -114,4 +137,16 @@ export interface CardMovedPayload {
   toListId: string;
   newIndex: number; // position within the destination list's cardOrder
   movedBy: string; // User.id of who made the change
+}
+
+/** Payload for `workspace:member-added` / `workspace:member-removed`. */
+export interface WorkspaceMembershipPayload {
+  workspaceId: string;
+  member: WorkspaceMember;
+}
+
+/** Payload for `workspace:access-revoked`, sent only to the affected user. */
+export interface AccessRevokedPayload {
+  workspaceId: string;
+  workspaceName: string;
 }

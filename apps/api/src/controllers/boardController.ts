@@ -4,6 +4,7 @@ import { WorkspaceModel } from "../models/Workspace";
 import { ListModel } from "../models/List";
 import { CardModel } from "../models/Card";
 import type { Board } from "@fluxboard/shared-types";
+import { SocketEvents } from "@fluxboard/shared-types";
 
 /** Converts a Mongoose BoardDocument into the shared `Board` shape. */
 function toBoardResponse(doc: any): Board {
@@ -48,7 +49,9 @@ export async function createBoard(req: Request, res: Response) {
   }
 
   const board = await BoardModel.create({ workspaceId, title, listOrder: [] });
-  res.status(201).json(toBoardResponse(board));
+  const boardResponse = toBoardResponse(board);
+  req.app.get("io").to(`workspace:${workspaceId}`).emit(SocketEvents.BOARD_CREATED, boardResponse);
+  res.status(201).json(boardResponse);
 }
 
 /**
@@ -114,11 +117,13 @@ export async function updateBoard(req: Request, res: Response) {
   board.title = title;
   await board.save();
 
-  // Note: board rename isn't broadcast over sockets — unlike lists/cards,
-  // there's no per-workspace socket room today (only per-board), and board
-  // titles aren't shown on any screen two people are likely to have open
-  // at the same moment. A simple refetch-on-navigate is enough here.
-  res.json(toBoardResponse(board));
+  const boardResponse = toBoardResponse(board);
+  req.app
+    .get("io")
+    .to(`workspace:${board.workspaceId}`)
+    .emit(SocketEvents.BOARD_UPDATED, boardResponse);
+
+  res.json(boardResponse);
 }
 
 /**
@@ -151,5 +156,11 @@ export async function deleteBoard(req: Request, res: Response) {
   await ListModel.deleteMany({ boardId });
   await BoardModel.findByIdAndDelete(boardId);
 
-  res.json({ deleted: toBoardResponse(board) });
+  const boardResponse = toBoardResponse(board);
+  req.app
+    .get("io")
+    .to(`workspace:${board.workspaceId}`)
+    .emit(SocketEvents.BOARD_DELETED, boardResponse);
+
+  res.json({ deleted: boardResponse });
 }
