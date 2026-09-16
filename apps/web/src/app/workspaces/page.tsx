@@ -6,10 +6,12 @@ import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/components/ui/Toast";
 import { apiFetch, ApiError } from "@/lib/apiClient";
+import { getSocket } from "@/lib/socket";
 import { EditableTitle } from "@/components/ui/EditableTitle";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FolderIcon, LogOutIcon, PlusIcon, TrashIcon, SpinnerIcon } from "@/components/ui/icons";
 import type { Workspace } from "@fluxboard/shared-types";
+import { SocketEvents, type WorkspaceMembershipPayload } from "@fluxboard/shared-types";
 
 export default function WorkspacesPage() {
   const { user, accessToken, isLoading: authLoading, logout } = useAuth();
@@ -41,6 +43,30 @@ export default function WorkspacesPage() {
       .finally(() => setIsLoadingWorkspaces(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
+
+  // If someone adds this user to a workspace while they're sitting on this
+  // exact page, the new workspace appears in the grid immediately — no
+  // refresh needed. This relies on the shared socket already being in
+  // this user's personal `user:<id>` room (joined via identify() in
+  // AuthContext), so no explicit join call is needed here.
+  useEffect(() => {
+    if (!user) return;
+    const socket = getSocket();
+
+    function handleMemberAdded(payload: WorkspaceMembershipPayload & { workspace?: Workspace }) {
+      if (payload.member.id !== user!.id || !payload.workspace) return;
+      setWorkspaces((prev) =>
+        prev.some((ws) => ws.id === payload.workspace!.id) ? prev : [...prev, payload.workspace!]
+      );
+      showToast(`You were added to "${payload.workspace.name}"`);
+    }
+
+    socket.on(SocketEvents.MEMBER_ADDED, handleMemberAdded);
+    return () => {
+      socket.off(SocketEvents.MEMBER_ADDED, handleMemberAdded);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   async function handleCreateWorkspace(e: FormEvent) {
     e.preventDefault();

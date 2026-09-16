@@ -3,7 +3,10 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/apiClient";
+import { identifySocket, disconnectSocket, getSocket } from "@/lib/socket";
+import { useToast } from "@/components/ui/Toast";
 import type { User } from "@fluxboard/shared-types";
+import { SocketEvents, type AccessRevokedPayload } from "@fluxboard/shared-types";
 
 interface AuthTokens {
   accessToken: string;
@@ -56,6 +59,7 @@ function storeTokens(tokens: AuthTokens | null) {
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
+  const { showToast } = useToast();
   const [user, setUser] = useState<User | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -83,6 +87,59 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setIsLoading(false));
   }, []);
 
+  // Whenever we have a valid access token — on initial load, after login,
+  // after signup — (re)identify the shared socket connection so personal
+  // notifications (like "you were removed from a workspace") reach this
+  // client even when it isn't currently looking at that workspace/board.
+  useEffect(() => {
+    if (accessToken) identifySocket(accessToken);
+  }, [accessToken]);
+
+  // The one truly global real-time listener in the app: no matter which
+  // page someone is on — the workspaces grid, a specific workspace, or
+  // deep inside a board — if the owner removes them from a workspace,
+  // this fires immediately. Redirecting unconditionally to /workspaces is
+  // deliberately simple: it's always a safe landing spot, and figuring
+  // out "was the page they were on actually inside the affected
+  // workspace" isn't worth the complexity for what's fundamentally a rare
+  // event.
+  useEffect(() => {
+    if (!user) return;
+    const socket = getSocket();
+
+    function handleAccessRevoked(payload: AccessRevokedPayload) {
+      showToast(`You were removed from "${payload.workspaceName}"`, "error");
+      router.replace("/workspaces");
+    }
+
+    socket.on(SocketEvents.ACCESS_REVOKED, handleAccessRevoked);
+    return () => {
+      socket.off(SocketEvents.ACCESS_REVOKED, handleAccessRevoked);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  /**
+   * Where to send the user right after a successful login/signup. Normally
+   * that's just /workspaces, but if they arrived here via a link that
+   * needs them authenticated first — right now, only the invite-link flow
+   * does this (?redirect=/invite/<token>) — send them back to finish what
+   * they came here to do instead of dropping them on the generic
+   * workspaces list.
+   */
+  function getPostAuthRedirect(): string {
+    if (typeof window === "undefined") return "/workspaces";
+    const redirect = new URLSearchParams(window.location.search).get("redirect");
+    // Only ever redirect to a same-app relative path, and never back into
+    // the auth pages themselves — both guard against a malformed or
+    // tampered redirect param sending the user somewhere unintended or
+    // into a login<->redirect loop.
+    if (redirect && redirect.startsWith("/") && !redirect.startsWith("//") && !redirect.startsWith("/login") && !redirect.startsWith("/signup")) {
+      return redirect;
+    }
+    return "/workspaces";
+  }
+
   async function login(email: string, password: string) {
     const result = await apiFetch<{ user: User; accessToken: string; refreshToken: string }>(
       "/auth/login",
@@ -91,7 +148,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(result.user);
     setAccessToken(result.accessToken);
     storeTokens({ accessToken: result.accessToken, refreshToken: result.refreshToken });
-    router.push("/workspaces");
+    router.push(getPostAuthRedirect());
   }
 
   async function signup(email: string, password: string, displayName: string) {
@@ -102,13 +159,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(result.user);
     setAccessToken(result.accessToken);
     storeTokens({ accessToken: result.accessToken, refreshToken: result.refreshToken });
-    router.push("/workspaces");
+    router.push(getPostAuthRedirect());
   }
 
   function logout() {
     setUser(null);
     setAccessToken(null);
     storeTokens(null);
+    disconnectSocket();
     router.push("/login");
   }
 

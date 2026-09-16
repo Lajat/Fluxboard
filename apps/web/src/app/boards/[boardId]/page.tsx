@@ -25,9 +25,15 @@ import { TaskCard } from "@/components/TaskCard";
 import { CardDetailModal } from "@/components/CardDetailModal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EditableTitle } from "@/components/ui/EditableTitle";
+import { AvatarStack } from "@/components/ui/AvatarStack";
+import { MembersModal } from "@/components/MembersModal";
 import { ChevronLeftIcon, ChevronRightIcon, TrashIcon, PlusIcon, SpinnerIcon } from "@/components/ui/icons";
-import type { Board, List, Card } from "@fluxboard/shared-types";
-import { SocketEvents, type CardMovedPayload } from "@fluxboard/shared-types";
+import type { Board, List, Card, Workspace, WorkspaceMember } from "@fluxboard/shared-types";
+import {
+  SocketEvents,
+  type CardMovedPayload,
+  type WorkspaceMembershipPayload,
+} from "@fluxboard/shared-types";
 
 /**
  * Local shape for a list plus its resolved cards, in on-screen order.
@@ -56,6 +62,15 @@ export default function BoardPage() {
   const [isLoadingBoard, setIsLoadingBoard] = useState(true);
   const [openCard, setOpenCard] = useState<Card | null>(null);
   const [confirmingBoardDelete, setConfirmingBoardDelete] = useState(false);
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
+  const [isMembersModalOpen, setIsMembersModalOpen] = useState(false);
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [isLoadingInviteLink, setIsLoadingInviteLink] = useState(false);
+  // Computed early (rather than inline in JSX) because it's also needed
+  // inside a useEffect further down, and hooks can't follow a conditional
+  // return.
+  const isOwner = !!(workspace && user && workspace.ownerId === user.id);
   // Shown once per board, on mobile only, the first time there's more
   // than fits on screen — the edge fade is a subtle enough cue that a
   // first-time visitor might miss it entirely, so this spells it out
@@ -144,13 +159,112 @@ export default function BoardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, boardId]);
 
+  // The board response only carries workspaceId, not the workspace's own
+  // name/owner or its member list — fetched separately once we know which
+  // workspace this board belongs to, purely to power the avatar
+  // stack + members modal in the header (mirrors the same pattern as the
+  // workspace boards-list page).
+  useEffect(() => {
+    if (!accessToken || !board?.workspaceId) return;
+    Promise.all([
+      apiFetch<Workspace>(`/workspaces/${board.workspaceId}`, { accessToken }),
+      apiFetch<{ items: WorkspaceMember[] }>(`/workspaces/${board.workspaceId}/members`, {
+        accessToken,
+      }),
+    ])
+      .then(([ws, membersRes]) => {
+        setWorkspace(ws);
+        setMembers(membersRes.items);
+      })
+      .catch(() => {
+        // Non-critical for this page — the board itself still works fine
+        // without the avatar stack, so fail silently rather than
+        // interrupting the board with a toast for a secondary feature.
+      });
+  }, [accessToken, board?.workspaceId]);
+
+  // Workspace-level real-time awareness: this board can disappear (this
+  // exact board deleted, or its whole workspace deleted) or get renamed by
+  // someone else, and the member list can change — all while this page is
+  // open and only joined to the BOARD's room, not the workspace's. This
+  // separate effect/room is what catches those cases.
+  useEffect(() => {
+    if (!board?.workspaceId || !accessToken) return;
+    const socket = getSocket();
+    const workspaceId = board.workspaceId;
+    socket.emit("join-workspace", { workspaceId, accessToken });
+    function rejoinWorkspaceOnReconnect() {
+      socket.emit("join-workspace", { workspaceId, accessToken });
+    }
+    socket.on("connect", rejoinWorkspaceOnReconnect);
+
+    function handleBoardUpdated(updated: Board) {
+      if (updated.id !== boardId) return;
+      setBoard(updated);
+    }
+
+    function handleBoardDeleted(deleted: Board) {
+      if (deleted.id !== boardId) return;
+      showToast(`"${deleted.title}" was deleted`, "error");
+      router.replace(`/workspaces/${workspaceId}`);
+    }
+
+    function handleWorkspaceDeleted(deleted: Workspace) {
+      if (deleted.id !== workspaceId) return;
+      showToast(`"${deleted.name}" was deleted`, "error");
+      router.replace("/workspaces");
+    }
+
+    function handleMemberAdded({ workspaceId: wsId, member }: WorkspaceMembershipPayload) {
+      if (wsId !== workspaceId) return;
+      setMembers((prev) => (prev.some((m) => m.id === member.id) ? prev : [...prev, member]));
+    }
+
+    function handleMemberRemoved({
+      workspaceId: wsId,
+      userId,
+    }: {
+      workspaceId: string;
+      userId: string;
+    }) {
+      if (wsId !== workspaceId) return;
+      setMembers((prev) => prev.filter((m) => m.id !== userId));
+    }
+
+    socket.on(SocketEvents.BOARD_UPDATED, handleBoardUpdated);
+    socket.on(SocketEvents.BOARD_DELETED, handleBoardDeleted);
+    socket.on(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
+    socket.on(SocketEvents.MEMBER_ADDED, handleMemberAdded);
+    socket.on(SocketEvents.MEMBER_REMOVED, handleMemberRemoved);
+
+    return () => {
+      socket.emit("leave-workspace", workspaceId);
+      socket.off("connect", rejoinWorkspaceOnReconnect);
+      socket.off(SocketEvents.BOARD_UPDATED, handleBoardUpdated);
+      socket.off(SocketEvents.BOARD_DELETED, handleBoardDeleted);
+      socket.off(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
+      socket.off(SocketEvents.MEMBER_ADDED, handleMemberAdded);
+      socket.off(SocketEvents.MEMBER_REMOVED, handleMemberRemoved);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board?.workspaceId, boardId, accessToken]);
+
   // Real-time sync: join this board's room and apply events from OTHER
   // clients (and, harmlessly, our own — every handler below is written to
   // be idempotent, so re-applying an event we already reflected locally
   // via optimistic UI just re-does the same no-op change).
   useEffect(() => {
+    if (!accessToken) return;
     const socket = getSocket();
-    socket.emit("join-board", boardId);
+    socket.emit("join-board", { boardId, accessToken });
+    // Room membership lives on the server-side connection and is wiped
+    // out on every disconnect — a dropped wifi connection or a laptop
+    // waking from sleep silently reconnects the underlying socket but
+    // leaves it in no rooms at all unless we explicitly rejoin here.
+    function rejoinOnReconnect() {
+      socket.emit("join-board", { boardId, accessToken });
+    }
+    socket.on("connect", rejoinOnReconnect);
 
     function upsertCard(card: Card) {
       setCardsById((prev) => ({ ...prev, [card.id]: card }));
@@ -222,6 +336,7 @@ export default function BoardPage() {
 
     return () => {
       socket.emit("leave-board", boardId);
+      socket.off("connect", rejoinOnReconnect);
       socket.off(SocketEvents.CARD_CREATED, upsertCard);
       socket.off(SocketEvents.CARD_UPDATED, handleCardUpdated);
       socket.off(SocketEvents.CARD_DELETED, handleCardDeleted);
@@ -231,7 +346,7 @@ export default function BoardPage() {
       socket.off(SocketEvents.LIST_DELETED, handleListDeleted);
       socket.off(SocketEvents.LIST_REORDERED, handleListReordered);
     };
-  }, [boardId]);
+  }, [boardId, accessToken]);
 
   /** Fetches the board, its lists, and every list's cards, then flattens cards into one lookup map. */
   async function loadBoard() {
@@ -284,6 +399,56 @@ export default function BoardPage() {
       router.push(board ? `/workspaces/${board.workspaceId}` : "/workspaces");
     } catch (err) {
       showToast(err instanceof ApiError ? err.message : "Failed to delete board", "error");
+    }
+  }
+
+  async function handleInviteMember(email: string) {
+    if (!board) return;
+    const res = await apiFetch<{ workspace: Workspace; member: WorkspaceMember }>(
+      `/workspaces/${board.workspaceId}/members`,
+      { method: "POST", accessToken, body: { email } }
+    );
+    setMembers((prev) => (prev.some((m) => m.id === res.member.id) ? prev : [...prev, res.member]));
+    showToast(`${res.member.displayName} was added to the workspace`);
+  }
+
+  async function handleRemoveMember(member: WorkspaceMember) {
+    if (!board) return;
+    try {
+      await apiFetch(`/workspaces/${board.workspaceId}/members/${member.id}`, {
+        method: "DELETE",
+        accessToken,
+      });
+      setMembers((prev) => prev.filter((m) => m.id !== member.id));
+      showToast(`${member.displayName} was removed from the workspace`);
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : "Failed to remove member", "error");
+    }
+  }
+
+  // Lazily fetch the invite link only once the owner actually opens the
+  // members modal — see the identical pattern (and full reasoning) on the
+  // workspace boards-list page.
+  useEffect(() => {
+    if (!isMembersModalOpen || !isOwner || inviteToken || !accessToken || !board?.workspaceId) return;
+    setIsLoadingInviteLink(true);
+    apiFetch<{ token: string }>(`/workspaces/${board.workspaceId}/invite-link`, { accessToken })
+      .then((res) => setInviteToken(res.token))
+      .catch((err) => showToast(err instanceof ApiError ? err.message : "Failed to load invite link", "error"))
+      .finally(() => setIsLoadingInviteLink(false));
+  }, [isMembersModalOpen, isOwner, inviteToken, accessToken, board?.workspaceId, showToast]);
+
+  async function handleRegenerateInviteLink() {
+    if (!board) return;
+    try {
+      const res = await apiFetch<{ token: string }>(
+        `/workspaces/${board.workspaceId}/invite-link/regenerate`,
+        { method: "POST", accessToken }
+      );
+      setInviteToken(res.token);
+      showToast("Invite link regenerated");
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : "Failed to regenerate invite link", "error");
     }
   }
 
@@ -496,13 +661,22 @@ export default function BoardPage() {
               </span>
             )}
           </div>
-          <button
-            onClick={() => setConfirmingBoardDelete(true)}
-            className="flex shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-slate-400 hover:bg-red-50 hover:text-red-500"
-          >
-            <TrashIcon className="h-4 w-4" />
-            <span className="hidden sm:inline">Delete board</span>
-          </button>
+          <div className="flex shrink-0 items-center gap-1">
+            {members.length > 0 && (
+              <AvatarStack
+                members={members}
+                onClick={() => setIsMembersModalOpen(true)}
+                size="sm"
+              />
+            )}
+            <button
+              onClick={() => setConfirmingBoardDelete(true)}
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-slate-400 hover:bg-red-50 hover:text-red-500"
+            >
+              <TrashIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">Delete board</span>
+            </button>
+          </div>
         </div>
       </header>
 
@@ -651,6 +825,26 @@ export default function BoardPage() {
         onCancel={() => setConfirmingBoardDelete(false)}
         onConfirm={handleDeleteBoard}
       />
+
+      {user && workspace && (
+        <MembersModal
+          open={isMembersModalOpen}
+          onClose={() => setIsMembersModalOpen(false)}
+          workspaceName={workspace.name}
+          members={members}
+          isOwner={isOwner}
+          currentUserId={user.id}
+          onInvite={handleInviteMember}
+          onRemove={handleRemoveMember}
+          inviteLink={
+            inviteToken && typeof window !== "undefined"
+              ? `${window.location.origin}/invite/${inviteToken}`
+              : null
+          }
+          isLoadingInviteLink={isLoadingInviteLink}
+          onRegenerateInviteLink={handleRegenerateInviteLink}
+        />
+      )}
     </main>
   );
 }

@@ -6,10 +6,14 @@ import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/components/ui/Toast";
 import { apiFetch, ApiError } from "@/lib/apiClient";
+import { getSocket } from "@/lib/socket";
 import { EditableTitle } from "@/components/ui/EditableTitle";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { AvatarStack } from "@/components/ui/AvatarStack";
+import { MembersModal } from "@/components/MembersModal";
 import { ChevronLeftIcon, LayoutIcon, PlusIcon, TrashIcon, SpinnerIcon } from "@/components/ui/icons";
-import type { Board, Workspace } from "@fluxboard/shared-types";
+import type { Board, Workspace, WorkspaceMember } from "@fluxboard/shared-types";
+import { SocketEvents, type WorkspaceMembershipPayload } from "@fluxboard/shared-types";
 
 // A small rotating set of gradients for board tile headers — purely
 // cosmetic, but it makes a grid of same-shaped tiles easy to tell apart
@@ -31,11 +35,19 @@ export default function WorkspaceBoardsPage() {
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [boards, setBoards] = useState<Board[]>([]);
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [isLoadingBoards, setIsLoadingBoards] = useState(true);
   const [newBoardTitle, setNewBoardTitle] = useState("");
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [deletingBoard, setDeletingBoard] = useState<Board | null>(null);
+  const [isMembersModalOpen, setIsMembersModalOpen] = useState(false);
+  const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [isLoadingInviteLink, setIsLoadingInviteLink] = useState(false);
+  // Computed early (rather than after the loading-state early return below)
+  // because it's needed inside a useEffect further down, and hooks can't
+  // follow a conditional return.
+  const isOwner = workspace?.ownerId === user?.id;
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -49,17 +61,97 @@ export default function WorkspaceBoardsPage() {
     Promise.all([
       apiFetch<Workspace>(`/workspaces/${workspaceId}`, { accessToken }),
       apiFetch<{ items: Board[] }>(`/workspaces/${workspaceId}/boards`, { accessToken }),
+      apiFetch<{ items: WorkspaceMember[] }>(`/workspaces/${workspaceId}/members`, { accessToken }),
     ])
-      .then(([ws, boardsRes]) => {
+      .then(([ws, boardsRes, membersRes]) => {
         setWorkspace(ws);
         setBoards(boardsRes.items);
+        setMembers(membersRes.items);
       })
       .catch((err) =>
-        showToast(err instanceof ApiError ? err.message : "Failed to load boards", "error")
+        showToast(err instanceof ApiError ? err.message : "Failed to load workspace", "error")
       )
       .finally(() => setIsLoadingBoards(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken, workspaceId]);
+
+  // Real-time sync for everything at the workspace level: boards being
+  // created/renamed/deleted by someone else, members joining/leaving, and
+  // the workspace itself being renamed or deleted out from under this
+  // page. This is the piece that makes "multiple people looking at the
+  // same workspace" actually behave like it — without it, every one of
+  // these changes would only show up on this page's next manual refresh.
+  useEffect(() => {
+    if (!accessToken) return;
+    const socket = getSocket();
+    socket.emit("join-workspace", { workspaceId, accessToken });
+    function rejoinOnReconnect() {
+      socket.emit("join-workspace", { workspaceId, accessToken });
+    }
+    socket.on("connect", rejoinOnReconnect);
+
+    function handleBoardCreated(board: Board) {
+      if (board.workspaceId !== workspaceId) return;
+      // Guards against double-adding in the tab that created it — see the
+      // identical pattern (and full explanation) in the board page for
+      // cards/lists: the socket event and this tab's own HTTP response
+      // can arrive in either order.
+      setBoards((prev) => (prev.some((b) => b.id === board.id) ? prev : [...prev, board]));
+    }
+
+    function handleBoardUpdated(board: Board) {
+      if (board.workspaceId !== workspaceId) return;
+      setBoards((prev) => prev.map((b) => (b.id === board.id ? board : b)));
+    }
+
+    function handleBoardDeleted(board: Board) {
+      if (board.workspaceId !== workspaceId) return;
+      setBoards((prev) => prev.filter((b) => b.id !== board.id));
+    }
+
+    function handleWorkspaceUpdated(updated: Workspace) {
+      if (updated.id !== workspaceId) return;
+      setWorkspace(updated);
+    }
+
+    function handleWorkspaceDeleted(deleted: Workspace) {
+      if (deleted.id !== workspaceId) return;
+      showToast(`"${deleted.name}" was deleted`, "error");
+      router.replace("/workspaces");
+    }
+
+    function handleMemberAdded({ workspaceId: wsId, member }: WorkspaceMembershipPayload) {
+      if (wsId !== workspaceId) return;
+      setMembers((prev) => (prev.some((m) => m.id === member.id) ? prev : [...prev, member]));
+      if (member.id !== user?.id) showToast(`${member.displayName} joined the workspace`);
+    }
+
+    function handleMemberRemoved({ workspaceId: wsId, userId }: { workspaceId: string; userId: string }) {
+      if (wsId !== workspaceId) return;
+      setMembers((prev) => prev.filter((m) => m.id !== userId));
+    }
+
+    socket.on(SocketEvents.BOARD_CREATED, handleBoardCreated);
+    socket.on(SocketEvents.BOARD_UPDATED, handleBoardUpdated);
+    socket.on(SocketEvents.BOARD_DELETED, handleBoardDeleted);
+    socket.on(SocketEvents.WORKSPACE_UPDATED, handleWorkspaceUpdated);
+    socket.on(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
+    socket.on(SocketEvents.MEMBER_ADDED, handleMemberAdded);
+    socket.on(SocketEvents.MEMBER_REMOVED, handleMemberRemoved);
+
+    return () => {
+      socket.emit("leave-workspace", workspaceId);
+      socket.off("connect", rejoinOnReconnect);
+      socket.off(SocketEvents.BOARD_CREATED, handleBoardCreated);
+      socket.off(SocketEvents.BOARD_UPDATED, handleBoardUpdated);
+      socket.off(SocketEvents.BOARD_DELETED, handleBoardDeleted);
+      socket.off(SocketEvents.WORKSPACE_UPDATED, handleWorkspaceUpdated);
+      socket.off(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
+      socket.off(SocketEvents.MEMBER_ADDED, handleMemberAdded);
+      socket.off(SocketEvents.MEMBER_REMOVED, handleMemberRemoved);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId, user?.id, accessToken]);
 
   async function handleCreateBoard(e: FormEvent) {
     e.preventDefault();
@@ -74,7 +166,7 @@ export default function WorkspaceBoardsPage() {
         accessToken,
         body: { title: newBoardTitle },
       });
-      setBoards((prev) => [...prev, created]);
+      setBoards((prev) => (prev.some((b) => b.id === created.id) ? prev : [...prev, created]));
       setNewBoardTitle("");
       setIsCreating(false);
       setCreateError(null);
@@ -109,6 +201,54 @@ export default function WorkspaceBoardsPage() {
     }
   }
 
+  async function handleInviteMember(email: string) {
+    const res = await apiFetch<{ workspace: Workspace; member: WorkspaceMember }>(
+      `/workspaces/${workspaceId}/members`,
+      { method: "POST", accessToken, body: { email } }
+    );
+    setMembers((prev) => (prev.some((m) => m.id === res.member.id) ? prev : [...prev, res.member]));
+    showToast(`${res.member.displayName} was added to the workspace`);
+  }
+
+  async function handleRemoveMember(member: WorkspaceMember) {
+    try {
+      await apiFetch(`/workspaces/${workspaceId}/members/${member.id}`, {
+        method: "DELETE",
+        accessToken,
+      });
+      setMembers((prev) => prev.filter((m) => m.id !== member.id));
+      showToast(`${member.displayName} was removed from the workspace`);
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : "Failed to remove member", "error");
+    }
+  }
+
+  // Lazily fetch the invite link only once the owner actually opens the
+  // members modal (not on page load) — it's a secondary action most
+  // visits to this page never need, so there's no reason to spend a
+  // request on it up front.
+  useEffect(() => {
+    if (!isMembersModalOpen || !isOwner || inviteToken || !accessToken) return;
+    setIsLoadingInviteLink(true);
+    apiFetch<{ token: string }>(`/workspaces/${workspaceId}/invite-link`, { accessToken })
+      .then((res) => setInviteToken(res.token))
+      .catch((err) => showToast(err instanceof ApiError ? err.message : "Failed to load invite link", "error"))
+      .finally(() => setIsLoadingInviteLink(false));
+  }, [isMembersModalOpen, isOwner, inviteToken, accessToken, workspaceId, showToast]);
+
+  async function handleRegenerateInviteLink() {
+    try {
+      const res = await apiFetch<{ token: string }>(`/workspaces/${workspaceId}/invite-link/regenerate`, {
+        method: "POST",
+        accessToken,
+      });
+      setInviteToken(res.token);
+      showToast("Invite link regenerated");
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : "Failed to regenerate invite link", "error");
+    }
+  }
+
   if (authLoading || isLoadingBoards) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-50">
@@ -127,9 +267,12 @@ export default function WorkspaceBoardsPage() {
           <ChevronLeftIcon className="h-4 w-4" /> All workspaces
         </Link>
 
-        <h1 className="mb-8 text-xl font-bold text-slate-900 sm:text-2xl">
-          {workspace?.name ?? "Workspace"}
-        </h1>
+        <div className="mb-8 flex items-center justify-between gap-3">
+          <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">
+            {workspace?.name ?? "Workspace"}
+          </h1>
+          <AvatarStack members={members} onClick={() => setIsMembersModalOpen(true)} />
+        </div>
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {boards.map((board, i) => (
@@ -228,6 +371,26 @@ export default function WorkspaceBoardsPage() {
         onCancel={() => setDeletingBoard(null)}
         onConfirm={handleDeleteBoard}
       />
+
+      {user && (
+        <MembersModal
+          open={isMembersModalOpen}
+          onClose={() => setIsMembersModalOpen(false)}
+          workspaceName={workspace?.name ?? "Workspace"}
+          members={members}
+          isOwner={isOwner}
+          currentUserId={user.id}
+          onInvite={handleInviteMember}
+          onRemove={handleRemoveMember}
+          inviteLink={
+            inviteToken && typeof window !== "undefined"
+              ? `${window.location.origin}/invite/${inviteToken}`
+              : null
+          }
+          isLoadingInviteLink={isLoadingInviteLink}
+          onRegenerateInviteLink={handleRegenerateInviteLink}
+        />
+      )}
     </main>
   );
 }
