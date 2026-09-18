@@ -6,7 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "jest"
+    "test": "jest",
+    "test:integration": "node --import tsx test/auth.integration.ts"
   },
   "dependencies": {
     "@fluxboard/shared-types": "workspace:*",
