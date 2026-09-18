@@ -5,8 +5,8 @@ import { Modal } from "./ui/Modal";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { avatarColorFor, initialsFor } from "@/lib/avatar";
 import { emailError as getEmailError } from "@/lib/validation";
-import { UserPlusIcon, TrashIcon, SpinnerIcon, LinkIcon, CheckIcon } from "./ui/icons";
-import type { WorkspaceMember } from "@fluxboard/shared-types";
+import { UserPlusIcon, TrashIcon, SpinnerIcon, LinkIcon, CheckIcon, PlusIcon, PencilIcon } from "./ui/icons";
+import type { WorkspaceMember, MemberPermissions } from "@fluxboard/shared-types";
 
 interface MembersModalProps {
   open: boolean;
@@ -17,6 +17,8 @@ interface MembersModalProps {
   currentUserId: string;
   onInvite: (email: string) => Promise<void>;
   onRemove: (member: WorkspaceMember) => Promise<void>;
+  /** Flips one of a member's canAdd/canEdit/canDelete flags — owner-only, called from the toggle chips below each non-owner member. */
+  onUpdatePermissions: (member: WorkspaceMember, updates: Partial<MemberPermissions>) => Promise<void>;
   /** Full shareable URL (e.g. "https://app.com/invite/abc123"), or null while it's still loading/not yet fetched. Owner-only feature — parent only needs to fetch this when isOwner is true. */
   inviteLink: string | null;
   isLoadingInviteLink: boolean;
@@ -40,6 +42,7 @@ export function MembersModal({
   currentUserId,
   onInvite,
   onRemove,
+  onUpdatePermissions,
   inviteLink,
   isLoadingInviteLink,
   onRegenerateInviteLink,
@@ -51,6 +54,7 @@ export function MembersModal({
   const [removingMember, setRemovingMember] = useState<WorkspaceMember | null>(null);
   const [confirmingRegenerate, setConfirmingRegenerate] = useState(false);
   const [justCopied, setJustCopied] = useState(false);
+  const [savingPermissionKey, setSavingPermissionKey] = useState<string | null>(null);
 
   const validationError = getEmailError(email);
 
@@ -82,6 +86,16 @@ export function MembersModal({
       // Clipboard API can be blocked (permissions, insecure context, very
       // old browser) — the link is still selectable/copyable by hand
       // right there in the input, so this isn't a hard failure.
+    }
+  }
+
+  async function handleTogglePermission(member: WorkspaceMember, field: keyof MemberPermissions) {
+    const key = `${member.id}-${field}`;
+    setSavingPermissionKey(key);
+    try {
+      await onUpdatePermissions(member, { [field]: !member.permissions[field] });
+    } finally {
+      setSavingPermissionKey(null);
     }
   }
 
@@ -165,40 +179,80 @@ export function MembersModal({
 
         <ul className="max-h-72 space-y-1 overflow-y-auto">
           {members.map((member) => (
-            <li
-              key={member.id}
-              className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-slate-50"
-            >
-              <span
-                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white ${avatarColorFor(
-                  member.id
-                )}`}
-              >
-                {initialsFor(member.displayName)}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-slate-800">
-                  {member.displayName}
-                  {member.id === currentUserId && (
-                    <span className="ml-1.5 font-normal text-slate-400">(you)</span>
-                  )}
-                </p>
-                <p className="truncate text-xs text-slate-400">{member.email}</p>
-              </div>
-              {member.role === "owner" ? (
-                <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-600">
-                  Owner
+            <li key={member.id} className="rounded-lg px-2 py-2 hover:bg-slate-50">
+              <div className="flex items-center gap-3">
+                <span
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white ${avatarColorFor(
+                    member.id
+                  )}`}
+                >
+                  {initialsFor(member.displayName)}
                 </span>
-              ) : (
-                isOwner && (
-                  <button
-                    onClick={() => setRemovingMember(member)}
-                    aria-label={`Remove ${member.displayName}`}
-                    className="shrink-0 rounded-md p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-500"
-                  >
-                    <TrashIcon className="h-4 w-4" />
-                  </button>
-                )
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-slate-800">
+                    {member.displayName}
+                    {member.id === currentUserId && (
+                      <span className="ml-1.5 font-normal text-slate-400">(you)</span>
+                    )}
+                  </p>
+                  <p className="truncate text-xs text-slate-400">{member.email}</p>
+                </div>
+                {member.role === "owner" ? (
+                  <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-600">
+                    Owner
+                  </span>
+                ) : (
+                  isOwner && (
+                    <button
+                      onClick={() => setRemovingMember(member)}
+                      aria-label={`Remove ${member.displayName}`}
+                      className="shrink-0 rounded-md p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-500"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  )
+                )}
+              </div>
+
+              {/* Per-member permission toggles — owner-only, and not shown
+                  for the owner's own row since the owner always has full
+                  access by definition (see lib/permissions.ts). Each chip
+                  is independently clickable and reflects its live state,
+                  so the owner can see at a glance what a member can and
+                  can't do without opening a separate settings screen. */}
+              {isOwner && member.role !== "owner" && (
+                <div className="ml-12 mt-1.5 flex gap-1.5">
+                  {(
+                    [
+                      { field: "canAdd" as const, label: "Add", icon: PlusIcon },
+                      { field: "canEdit" as const, label: "Edit", icon: PencilIcon },
+                      { field: "canDelete" as const, label: "Delete", icon: TrashIcon },
+                    ]
+                  ).map(({ field, label, icon: Icon }) => {
+                    const isOn = member.permissions[field];
+                    const isSaving = savingPermissionKey === `${member.id}-${field}`;
+                    return (
+                      <button
+                        key={field}
+                        onClick={() => handleTogglePermission(member, field)}
+                        disabled={isSaving}
+                        title={`${isOn ? "Revoke" : "Grant"} ${label.toLowerCase()} permission`}
+                        className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition disabled:opacity-50 ${
+                          isOn
+                            ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                            : "bg-slate-100 text-slate-400 hover:bg-slate-200"
+                        }`}
+                      >
+                        {isSaving ? (
+                          <SpinnerIcon className="h-3 w-3" />
+                        ) : (
+                          <Icon className="h-3 w-3" />
+                        )}
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
               )}
             </li>
           ))}

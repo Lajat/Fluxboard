@@ -5,6 +5,8 @@ import { ListModel } from "../models/List";
 import { CardModel } from "../models/Card";
 import type { Board } from "@fluxboard/shared-types";
 import { SocketEvents } from "@fluxboard/shared-types";
+import { getMemberPermissions, isWorkspaceMember } from "../lib/permissions";
+import { generateKeyPrefix } from "../lib/taskId";
 
 /** Converts a Mongoose BoardDocument into the shared `Board` shape. */
 function toBoardResponse(doc: any): Board {
@@ -18,22 +20,13 @@ function toBoardResponse(doc: any): Board {
 }
 
 /**
- * Confirms the logged-in user is a member of the given workspace before
- * letting them touch any board inside it. Every handler below calls this
- * first — duplicated as a small helper rather than middleware, since it
- * needs the workspaceId from different places depending on the route
- * (from req.params directly on create, but from the board's own record on
- * delete/update).
- */
-async function assertWorkspaceMember(workspaceId: string, userId: string) {
-  const workspace = await WorkspaceModel.findById(workspaceId);
-  if (!workspace) return false;
-  return workspace.memberIds.some((id) => id.toString() === userId);
-}
-
-/**
  * POST /workspaces/:workspaceId/boards
- * Creates a new board inside a workspace the user belongs to.
+ * Creates a new board inside a workspace the user has "add" permission
+ * in. Also generates the board's task-ID key prefix from its title right
+ * away (see lib/taskId) — cards created on it will need this immediately,
+ * so there's no reason to defer it the way Workspace.inviteToken is
+ * deferred (which only needs generating if the owner actually opens the
+ * invite panel).
  */
 export async function createBoard(req: Request, res: Response) {
   const { workspaceId } = req.params;
@@ -43,12 +36,26 @@ export async function createBoard(req: Request, res: Response) {
     return res.status(400).json({ error: "title is required" });
   }
 
-  const isMember = await assertWorkspaceMember(workspaceId, req.userId!);
-  if (!isMember) {
+  const workspace = await WorkspaceModel.findById(workspaceId);
+  if (!workspace) {
     return res.status(404).json({ error: "workspace not found" });
   }
 
-  const board = await BoardModel.create({ workspaceId, title, listOrder: [] });
+  const permissions = getMemberPermissions(workspace, req.userId!);
+  if (!permissions) {
+    return res.status(404).json({ error: "workspace not found" });
+  }
+  if (!permissions.canAdd) {
+    return res.status(403).json({ error: "you don't have permission to create boards in this workspace" });
+  }
+
+  const board = await BoardModel.create({
+    workspaceId,
+    title,
+    listOrder: [],
+    keyPrefix: generateKeyPrefix(title),
+    cardCounter: 0,
+  });
   const boardResponse = toBoardResponse(board);
   req.app.get("io").to(`workspace:${workspaceId}`).emit(SocketEvents.BOARD_CREATED, boardResponse);
   res.status(201).json(boardResponse);
@@ -56,13 +63,15 @@ export async function createBoard(req: Request, res: Response) {
 
 /**
  * GET /workspaces/:workspaceId/boards
- * Lists every board in a workspace the user belongs to.
+ * Lists every board in a workspace the user belongs to. Plain membership
+ * is enough here — viewing doesn't require any specific permission, only
+ * mutating does.
  */
 export async function listBoardsForWorkspace(req: Request, res: Response) {
   const { workspaceId } = req.params;
 
-  const isMember = await assertWorkspaceMember(workspaceId, req.userId!);
-  if (!isMember) {
+  const workspace = await WorkspaceModel.findById(workspaceId);
+  if (!workspace || !isWorkspaceMember(workspace, req.userId!)) {
     return res.status(404).json({ error: "workspace not found" });
   }
 
@@ -82,8 +91,8 @@ export async function getBoard(req: Request, res: Response) {
     return res.status(404).json({ error: "board not found" });
   }
 
-  const isMember = await assertWorkspaceMember(board.workspaceId.toString(), req.userId!);
-  if (!isMember) {
+  const workspace = await WorkspaceModel.findById(board.workspaceId);
+  if (!workspace || !isWorkspaceMember(workspace, req.userId!)) {
     return res.status(404).json({ error: "board not found" });
   }
 
@@ -92,9 +101,10 @@ export async function getBoard(req: Request, res: Response) {
 
 /**
  * PATCH /boards/:boardId
- * Renames a board. Only title is editable here — moving a board between
- * workspaces isn't supported, so workspaceId is intentionally never
- * accepted from the request body.
+ * Renames a board — requires "edit" permission in its workspace. Only
+ * title is editable here — moving a board between workspaces isn't
+ * supported, so workspaceId is intentionally never accepted from the
+ * request body.
  */
 export async function updateBoard(req: Request, res: Response) {
   const { boardId } = req.params;
@@ -109,9 +119,13 @@ export async function updateBoard(req: Request, res: Response) {
     return res.status(404).json({ error: "board not found" });
   }
 
-  const isMember = await assertWorkspaceMember(board.workspaceId.toString(), req.userId!);
-  if (!isMember) {
+  const workspace = await WorkspaceModel.findById(board.workspaceId);
+  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
+  if (!permissions) {
     return res.status(404).json({ error: "board not found" });
+  }
+  if (!permissions.canEdit) {
+    return res.status(403).json({ error: "you don't have permission to edit this board" });
   }
 
   board.title = title;
@@ -128,9 +142,10 @@ export async function updateBoard(req: Request, res: Response) {
 
 /**
  * DELETE /boards/:boardId
- * Deletes a board and cascades: every List in the board, and every Card in
- * those lists, is deleted too — a board should never leave orphaned lists
- * or cards behind that no UI can reach anymore.
+ * Deletes a board — requires "delete" permission in its workspace.
+ * Cascades: every List in the board, and every Card in those lists, is
+ * deleted too — a board should never leave orphaned lists or cards behind
+ * that no UI can reach anymore.
  */
 export async function deleteBoard(req: Request, res: Response) {
   const { boardId } = req.params;
@@ -140,9 +155,13 @@ export async function deleteBoard(req: Request, res: Response) {
     return res.status(404).json({ error: "board not found" });
   }
 
-  const isMember = await assertWorkspaceMember(board.workspaceId.toString(), req.userId!);
-  if (!isMember) {
+  const workspace = await WorkspaceModel.findById(board.workspaceId);
+  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
+  if (!permissions) {
     return res.status(404).json({ error: "board not found" });
+  }
+  if (!permissions.canDelete) {
+    return res.status(403).json({ error: "you don't have permission to delete this board" });
   }
 
   const lists = await ListModel.find({ boardId });

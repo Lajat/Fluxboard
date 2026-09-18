@@ -1,0 +1,125 @@
+name: Build, Test, Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    # A real MongoDB instance for the API to connect to during the auth
+    # test — GitHub Actions spins this up as a sidecar container alongside
+    # the job, reachable at localhost:27017 for the duration of the run.
+    services:
+      mongodb:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.adminCommand(\"ping\")'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Building shared-types is required before either app can typecheck
+      # against it, since both import it as a compiled package, not raw
+      # TypeScript source (see packages/shared-types/package.json "main").
+      - name: Build shared-types
+        run: pnpm --filter @fluxboard/shared-types build
+
+      - name: Build API
+        run: pnpm --filter @fluxboard/api build
+
+      - name: Typecheck web (Next.js build)
+        run: pnpm --filter @fluxboard/web build
+        env:
+          # Dummy values — this step only verifies the frontend compiles
+          # and typechecks cleanly, it never actually runs against a real
+          # backend, so these just need to be present, not correct.
+          NEXT_PUBLIC_API_URL: http://localhost:4000
+          NEXT_PUBLIC_SOCKET_URL: http://localhost:4000
+
+      - name: Start API for integration test
+        working-directory: apps/api
+        run: |
+          node dist/index.js &
+          echo "Waiting for API to become healthy..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:4000/health > /dev/null; then
+              echo "API is healthy."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "API did not become healthy in time."
+          exit 1
+        env:
+          PORT: 4000
+          MONGODB_URI: mongodb://localhost:27017/fluxboard_ci
+          JWT_ACCESS_SECRET: ci-test-access-secret
+          JWT_REFRESH_SECRET: ci-test-refresh-secret
+          WEB_ORIGIN: http://localhost:3000
+
+      - name: Run auth integration test
+        working-directory: apps/api
+        run: node --loader tsx test/auth.test.ts
+        env:
+          TEST_BASE_URL: http://localhost:4000
+
+  deploy-api:
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Package deployment bundle
+        run: |
+          zip -r deploy.zip . \
+            -x "node_modules/*" -x "apps/web/*" -x ".git/*" \
+            -x ".next/*" -x "*/dist/*" -x "*.env" -x "*.log"
+
+      - name: Deploy to Elastic Beanstalk
+        uses: einaregilsson/beanstalk-deploy@v22
+        with:
+          aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          application_name: fluxboard-api
+          environment_name: fluxboard-api-env
+          region: ${{ secrets.AWS_REGION }}
+          version_label: "deploy-${{ github.sha }}"
+          deployment_package: deploy.zip
+
+  # Note: the frontend (apps/web) is NOT deployed from this workflow.
+  # Vercel's own GitHub integration already auto-deploys on every push to
+  # main independently of GitHub Actions — adding a second deploy path
+  # here would just race against it. The "Typecheck web" step above is
+  # this pipeline's actual job for the frontend: catch a broken build
+  # before merge, and let Vercel handle shipping it.

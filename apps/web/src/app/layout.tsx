@@ -4,7 +4,7 @@ import { AuthProvider } from "@/context/AuthContext";
 import { ToastProvider } from "@/components/ui/Toast";
 
 export const metadata: Metadata = {
-  title: "Fluxboard",
+  title: "fluxboard",
   description: "A real-time collaborative Kanban board",
 };
 

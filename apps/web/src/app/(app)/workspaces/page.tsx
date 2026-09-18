@@ -4,6 +4,7 @@ import { useEffect, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
+import { useActiveWorkspace } from "@/context/ActiveWorkspaceContext";
 import { useToast } from "@/components/ui/Toast";
 import { apiFetch, ApiError } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
@@ -11,12 +12,20 @@ import { EditableTitle } from "@/components/ui/EditableTitle";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { FolderIcon, LogOutIcon, PlusIcon, TrashIcon, SpinnerIcon } from "@/components/ui/icons";
 import type { Workspace } from "@fluxboard/shared-types";
-import { SocketEvents, type WorkspaceMembershipPayload } from "@fluxboard/shared-types";
+import { SocketEvents, type WorkspaceMembershipPayload, type AccessRevokedPayload } from "@fluxboard/shared-types";
 
 export default function WorkspacesPage() {
   const { user, accessToken, isLoading: authLoading, logout } = useAuth();
   const { showToast } = useToast();
   const router = useRouter();
+  const { setActiveWorkspaceId } = useActiveWorkspace();
+
+  // This page isn't "inside" any particular workspace — clear the
+  // sidebar's highlighted/auto-expanded one so it doesn't keep showing a
+  // stale selection from wherever the user was before.
+  useEffect(() => {
+    setActiveWorkspaceId(null);
+  }, [setActiveWorkspaceId]);
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(true);
@@ -47,8 +56,9 @@ export default function WorkspacesPage() {
   // If someone adds this user to a workspace while they're sitting on this
   // exact page, the new workspace appears in the grid immediately — no
   // refresh needed. This relies on the shared socket already being in
-  // this user's personal `user:<id>` room (joined via identify() in
-  // AuthContext), so no explicit join call is needed here.
+  // this user's personal `user:<id>` room, which happens automatically at
+  // connection time via the httpOnly auth cookie (see lib/socket.ts) — no
+  // explicit join call needed here.
   useEffect(() => {
     if (!user) return;
     const socket = getSocket();
@@ -61,9 +71,21 @@ export default function WorkspacesPage() {
       showToast(`You were added to "${payload.workspace.name}"`);
     }
 
+    // The counterpart to the above: if someone is removed from a
+    // workspace WHILE already sitting on this exact grid, AuthContext's
+    // global listener will try to redirect them to /workspaces — but
+    // they're already here, so that redirect alone does nothing and the
+    // now-inaccessible workspace would otherwise just sit in the grid,
+    // stale, until a manual refresh. This removes it from view directly.
+    function handleAccessRevoked(payload: AccessRevokedPayload) {
+      setWorkspaces((prev) => prev.filter((ws) => ws.id !== payload.workspaceId));
+    }
+
     socket.on(SocketEvents.MEMBER_ADDED, handleMemberAdded);
+    socket.on(SocketEvents.ACCESS_REVOKED, handleAccessRevoked);
     return () => {
       socket.off(SocketEvents.MEMBER_ADDED, handleMemberAdded);
+      socket.off(SocketEvents.ACCESS_REVOKED, handleAccessRevoked);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);

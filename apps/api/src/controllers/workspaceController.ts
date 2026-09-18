@@ -8,6 +8,7 @@ import { ListModel } from "../models/List";
 import { CardModel } from "../models/Card";
 import type { Workspace, WorkspaceMember } from "@fluxboard/shared-types";
 import { SocketEvents } from "@fluxboard/shared-types";
+import { getMemberPermissions } from "../lib/permissions";
 
 /** Converts a Mongoose WorkspaceDocument into the shared `Workspace` shape sent to the frontend. */
 function toWorkspaceResponse(doc: any): Workspace {
@@ -155,12 +156,21 @@ export async function deleteWorkspace(req: Request, res: Response) {
  * badge" logic lives in exactly one place.
  */
 function toMemberResponse(user: any, workspace: any): WorkspaceMember {
+  const userId = user._id.toString();
   return {
-    id: user._id.toString(),
+    id: userId,
     email: user.email,
     displayName: user.displayName,
     avatarUrl: user.avatarUrl,
-    role: user._id.toString() === workspace.ownerId.toString() ? "owner" : "member",
+    role: userId === workspace.ownerId.toString() ? "owner" : "member",
+    // Falls back to full permissions if somehow called for a non-member
+    // (shouldn't happen given every call site already filters to actual
+    // members first) rather than crashing on a null.
+    permissions: getMemberPermissions(workspace, userId) ?? {
+      canAdd: true,
+      canEdit: true,
+      canDelete: true,
+    },
   };
 }
 
@@ -282,6 +292,14 @@ export async function removeMember(req: Request, res: Response) {
   }
 
   workspace.memberIds = workspace.memberIds.filter((id) => id.toString() !== userId);
+  // Also drop any permission override for them — harmless to leave behind
+  // (getMemberPermissions checks memberIds first and would never look it
+  // up again), but cleaning it up avoids the array quietly accumulating
+  // dead entries for people who've been removed and re-invited multiple
+  // times over a workspace's life.
+  workspace.memberPermissions = workspace.memberPermissions.filter(
+    (p) => p.userId.toString() !== userId
+  );
   await workspace.save();
 
   const io = req.app.get("io");
@@ -295,6 +313,70 @@ export async function removeMember(req: Request, res: Response) {
   });
 
   res.json({ removed: userId });
+}
+
+/**
+ * PATCH /workspaces/:workspaceId/members/:userId/permissions
+ * Sets a member's canAdd/canEdit/canDelete flags — each field is
+ * optional in the request body so the owner can flip just one switch at
+ * a time without having to resend the whole set. Owner-only, and the
+ * owner can't be targeted (their permissions are always full, by
+ * definition — see getMemberPermissions).
+ */
+export async function updateMemberPermissions(req: Request, res: Response) {
+  const { workspaceId, userId } = req.params;
+  const { canAdd, canEdit, canDelete } = req.body;
+
+  const workspace = await WorkspaceModel.findById(workspaceId);
+  if (!workspace) {
+    return res.status(404).json({ error: "workspace not found" });
+  }
+
+  if (workspace.ownerId.toString() !== req.userId) {
+    return res.status(403).json({ error: "only the workspace owner can change member permissions" });
+  }
+
+  if (userId === workspace.ownerId.toString()) {
+    return res.status(400).json({ error: "the workspace owner's permissions can't be changed" });
+  }
+
+  const isMember = workspace.memberIds.some((id) => id.toString() === userId);
+  if (!isMember) {
+    return res.status(404).json({ error: "that person is not a member of this workspace" });
+  }
+
+  let entry = workspace.memberPermissions.find((p) => p.userId.toString() === userId);
+  if (!entry) {
+    // First time this member's permissions have ever been touched —
+    // start from the full-access default and apply only the fields this
+    // request actually specified.
+    entry = { userId: new Types.ObjectId(userId), canAdd: true, canEdit: true, canDelete: true };
+    workspace.memberPermissions.push(entry);
+  }
+  if (canAdd !== undefined) entry.canAdd = !!canAdd;
+  if (canEdit !== undefined) entry.canEdit = !!canEdit;
+  if (canDelete !== undefined) entry.canDelete = !!canDelete;
+
+  await workspace.save();
+
+  const user = await UserModel.findById(userId);
+  if (!user) {
+    return res.status(404).json({ error: "user not found" });
+  }
+
+  const member = toMemberResponse(user, workspace);
+  const io = req.app.get("io");
+  // Everyone looking at this workspace's member list sees the change
+  // live, and the affected member's own client can update what UI it
+  // shows them (e.g. disabling the "Add card" button) without needing to
+  // refresh.
+  io.to(`workspace:${workspaceId}`).emit(SocketEvents.MEMBER_PERMISSIONS_UPDATED, {
+    workspaceId,
+    member,
+  });
+  io.to(`user:${userId}`).emit(SocketEvents.MEMBER_PERMISSIONS_UPDATED, { workspaceId, member });
+
+  res.json({ member });
 }
 
 /**

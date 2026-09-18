@@ -4,6 +4,7 @@ import { useEffect, useState, FormEvent } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
+import { useActiveWorkspace } from "@/context/ActiveWorkspaceContext";
 import { useToast } from "@/components/ui/Toast";
 import { apiFetch, ApiError } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
@@ -12,8 +13,12 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AvatarStack } from "@/components/ui/AvatarStack";
 import { MembersModal } from "@/components/MembersModal";
 import { ChevronLeftIcon, LayoutIcon, PlusIcon, TrashIcon, SpinnerIcon } from "@/components/ui/icons";
-import type { Board, Workspace, WorkspaceMember } from "@fluxboard/shared-types";
-import { SocketEvents, type WorkspaceMembershipPayload } from "@fluxboard/shared-types";
+import type { Board, Workspace, WorkspaceMember, MemberPermissions } from "@fluxboard/shared-types";
+import {
+  SocketEvents,
+  type WorkspaceMembershipPayload,
+  type MemberPermissionsUpdatedPayload,
+} from "@fluxboard/shared-types";
 
 // A small rotating set of gradients for board tile headers — purely
 // cosmetic, but it makes a grid of same-shaped tiles easy to tell apart
@@ -32,6 +37,13 @@ export default function WorkspaceBoardsPage() {
   const router = useRouter();
   const params = useParams<{ workspaceId: string }>();
   const workspaceId = params.workspaceId;
+  const { setActiveWorkspaceId } = useActiveWorkspace();
+
+  // Tell the sidebar which workspace this page is "inside" so it
+  // auto-expands and highlights the right one — see ActiveWorkspaceContext.
+  useEffect(() => {
+    setActiveWorkspaceId(workspaceId);
+  }, [workspaceId, setActiveWorkspaceId]);
 
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [boards, setBoards] = useState<Board[]>([]);
@@ -48,6 +60,12 @@ export default function WorkspaceBoardsPage() {
   // because it's needed inside a useEffect further down, and hooks can't
   // follow a conditional return.
   const isOwner = workspace?.ownerId === user?.id;
+  // Same reasoning as the board page's myPermissions — see the comment
+  // there for why this defaults to full access while `members` is still
+  // loading rather than flashing every button as disabled.
+  const myPermissions = user
+    ? members.find((m) => m.id === user.id)?.permissions ?? { canAdd: true, canEdit: true, canDelete: true }
+    : { canAdd: false, canEdit: false, canDelete: false };
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -84,9 +102,9 @@ export default function WorkspaceBoardsPage() {
   useEffect(() => {
     if (!accessToken) return;
     const socket = getSocket();
-    socket.emit("join-workspace", { workspaceId, accessToken });
+    socket.emit("join-workspace", workspaceId);
     function rejoinOnReconnect() {
-      socket.emit("join-workspace", { workspaceId, accessToken });
+      socket.emit("join-workspace", workspaceId);
     }
     socket.on("connect", rejoinOnReconnect);
 
@@ -131,6 +149,11 @@ export default function WorkspaceBoardsPage() {
       setMembers((prev) => prev.filter((m) => m.id !== userId));
     }
 
+    function handleMemberPermissionsUpdated({ workspaceId: wsId, member }: MemberPermissionsUpdatedPayload) {
+      if (wsId !== workspaceId) return;
+      setMembers((prev) => prev.map((m) => (m.id === member.id ? member : m)));
+    }
+
     socket.on(SocketEvents.BOARD_CREATED, handleBoardCreated);
     socket.on(SocketEvents.BOARD_UPDATED, handleBoardUpdated);
     socket.on(SocketEvents.BOARD_DELETED, handleBoardDeleted);
@@ -138,6 +161,7 @@ export default function WorkspaceBoardsPage() {
     socket.on(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
     socket.on(SocketEvents.MEMBER_ADDED, handleMemberAdded);
     socket.on(SocketEvents.MEMBER_REMOVED, handleMemberRemoved);
+    socket.on(SocketEvents.MEMBER_PERMISSIONS_UPDATED, handleMemberPermissionsUpdated);
 
     return () => {
       socket.emit("leave-workspace", workspaceId);
@@ -149,6 +173,7 @@ export default function WorkspaceBoardsPage() {
       socket.off(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
       socket.off(SocketEvents.MEMBER_ADDED, handleMemberAdded);
       socket.off(SocketEvents.MEMBER_REMOVED, handleMemberRemoved);
+      socket.off(SocketEvents.MEMBER_PERMISSIONS_UPDATED, handleMemberPermissionsUpdated);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, user?.id, accessToken]);
@@ -223,6 +248,18 @@ export default function WorkspaceBoardsPage() {
     }
   }
 
+  async function handleUpdateMemberPermissions(member: WorkspaceMember, updates: Partial<MemberPermissions>) {
+    try {
+      const res = await apiFetch<{ member: WorkspaceMember }>(
+        `/workspaces/${workspaceId}/members/${member.id}/permissions`,
+        { method: "PATCH", accessToken, body: updates }
+      );
+      setMembers((prev) => prev.map((m) => (m.id === res.member.id ? res.member : m)));
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : "Failed to update permissions", "error");
+    }
+  }
+
   // Lazily fetch the invite link only once the owner actually opens the
   // members modal (not on page load) — it's a secondary action most
   // visits to this page never need, so there's no reason to spend a
@@ -291,24 +328,27 @@ export default function WorkspaceBoardsPage() {
                 <EditableTitle
                   value={board.title}
                   onSave={(next) => handleRenameBoard(board.id, next)}
+                  disabled={!myPermissions.canEdit}
                   className="line-clamp-2 text-sm font-semibold text-white hover:bg-white/15"
                   inputClassName="w-full rounded-md border border-white/40 bg-white/20 px-1.5 py-0.5 text-sm font-semibold text-white placeholder-white/70 outline-none ring-2 ring-white/30"
                 />
               </Link>
-              <button
-                onClick={(e) => {
-                  e.preventDefault();
-                  setDeletingBoard(board);
-                }}
-                aria-label={`Delete ${board.title}`}
-                className="absolute right-2 top-2 rounded-md bg-black/20 p-1.5 text-white opacity-100 backdrop-blur-sm transition hover:bg-black/40 sm:opacity-0 sm:group-hover:opacity-100"
-              >
-                <TrashIcon className="h-3.5 w-3.5" />
-              </button>
+              {myPermissions.canDelete && (
+                <button
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setDeletingBoard(board);
+                  }}
+                  aria-label={`Delete ${board.title}`}
+                  className="absolute right-2 top-2 rounded-md bg-black/20 p-1.5 text-white opacity-100 backdrop-blur-sm transition hover:bg-black/40 sm:opacity-0 sm:group-hover:opacity-100"
+                >
+                  <TrashIcon className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
           ))}
 
-          {isCreating ? (
+          {!myPermissions.canAdd ? null : isCreating ? (
             <form
               onSubmit={handleCreateBoard}
               className="col-span-2 flex h-28 flex-col justify-center rounded-xl border-2 border-dashed border-brand-300 bg-brand-50/50 p-3 sm:col-span-1"
@@ -382,6 +422,7 @@ export default function WorkspaceBoardsPage() {
           currentUserId={user.id}
           onInvite={handleInviteMember}
           onRemove={handleRemoveMember}
+          onUpdatePermissions={handleUpdateMemberPermissions}
           inviteLink={
             inviteToken && typeof window !== "undefined"
               ? `${window.location.origin}/invite/${inviteToken}`

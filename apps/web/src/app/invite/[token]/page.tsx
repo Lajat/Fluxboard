@@ -65,7 +65,7 @@ export default function InvitePage() {
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-sm">
             <LayoutIcon className="h-6 w-6" />
           </div>
-          <span className="text-sm font-semibold tracking-tight text-slate-400">Fluxboard</span>
+          <span className="text-sm font-semibold tracking-tight text-slate-400">fluxboard</span>
         </div>
 
         <div className="rounded-2xl bg-white p-8 text-center shadow-sm ring-1 ring-slate-100">

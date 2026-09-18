@@ -15,21 +15,24 @@ declare global {
 }
 
 /**
- * Verifies the JWT access token in the Authorization header and attaches
- * the decoded user id to `req.userId`. Any route that needs to know "who
- * is making this request" should sit behind this middleware.
+ * Verifies the accessToken httpOnly cookie and attaches the decoded user
+ * id to `req.userId`. Any route that needs to know "who is making this
+ * request" should sit behind this middleware.
  *
- * Expects: `Authorization: Bearer <token>`
+ * Reads from the cookie (set by authController on login/signup/refresh)
+ * rather than an `Authorization: Bearer` header — the browser attaches it
+ * automatically on every request to this API's origin, so the frontend
+ * never has to read, store, or manually attach the token itself, and it's
+ * never reachable by JavaScript at all (see cookie's httpOnly flag).
+ *
  * On failure: responds 401 and does NOT call next() — the request stops here.
  */
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const header = req.headers.authorization;
+  const token = req.cookies?.accessToken;
 
-  if (!header || !header.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Missing or malformed Authorization header" });
+  if (!token) {
+    return res.status(401).json({ error: "Not authenticated" });
   }
-
-  const token = header.slice("Bearer ".length);
 
   try {
     const secret = process.env.JWT_ACCESS_SECRET;

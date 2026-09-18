@@ -37,12 +37,20 @@ export interface Workspace {
  * (rather than putting this on Workspace itself) because most places that
  * fetch a Workspace don't need every member's profile, just the id list.
  */
+/** What a member is allowed to do within a workspace — see the owner-always-full-access and default-full-access-until-restricted rules in the API's lib/permissions.ts. */
+export interface MemberPermissions {
+  canAdd: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+}
+
 export interface WorkspaceMember {
   id: string;
   email: string;
   displayName: string;
   avatarUrl?: string;
   role: "owner" | "member";
+  permissions: MemberPermissions;
 }
 
 /** A single Kanban board that lives inside a workspace. */
@@ -73,9 +81,20 @@ export interface Card {
   assigneeId?: string; // User.id, if assigned
   dueDate?: string; // ISO 8601 timestamp, if set
   labels?: string[]; // color keywords, e.g. ["green", "red"]
+  priority?: Priority;
+  taskId?: string; // human-readable board-scoped id, e.g. "BT-7"
   createdAt: string;
   updatedAt: string;
 }
+
+export type Priority = "low" | "medium" | "high";
+
+/** Display metadata for each priority level, in severity order (lowest first) — one place both the card badge and the picker UI pull from, so they can never disagree on label text or color. */
+export const PRIORITY_META: Record<Priority, { label: string }> = {
+  low: { label: "Low" },
+  medium: { label: "Medium" },
+  high: { label: "High" },
+};
 
 /** Color keywords available for card labels, in display order. */
 export const LABEL_COLORS = [
@@ -98,6 +117,10 @@ export interface Comment {
   authorId: string; // User.id
   body: string;
   createdAt: string;
+  /** Denormalized at read-time by the API so the frontend doesn't need a
+   *  separate lookup per comment — not stored on the Comment document itself. */
+  authorName?: string;
+  authorAvatarUrl?: string;
 }
 
 /**
@@ -122,6 +145,7 @@ export const SocketEvents = {
   WORKSPACE_DELETED: "workspace:deleted",
   MEMBER_ADDED: "workspace:member-added",
   MEMBER_REMOVED: "workspace:member-removed",
+  MEMBER_PERMISSIONS_UPDATED: "workspace:member-permissions-updated",
   // Sent to a specific removed user's personal room ONLY (not the whole
   // workspace room the way MEMBER_REMOVED is) — the one signal a client
   // needs to immediately back out of a workspace/board it's currently
@@ -141,6 +165,12 @@ export interface CardMovedPayload {
 
 /** Payload for `workspace:member-added` / `workspace:member-removed`. */
 export interface WorkspaceMembershipPayload {
+  workspaceId: string;
+  member: WorkspaceMember;
+}
+
+/** Payload for `workspace:member-permissions-updated`. */
+export interface MemberPermissionsUpdatedPayload {
   workspaceId: string;
   member: WorkspaceMember;
 }

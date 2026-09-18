@@ -3,18 +3,22 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "@/lib/apiClient";
-import { identifySocket, disconnectSocket, getSocket } from "@/lib/socket";
+import { disconnectSocket, getSocket } from "@/lib/socket";
 import { useToast } from "@/components/ui/Toast";
 import type { User } from "@fluxboard/shared-types";
 import { SocketEvents, type AccessRevokedPayload } from "@fluxboard/shared-types";
 
-interface AuthTokens {
-  accessToken: string;
-  refreshToken: string;
-}
-
 interface AuthContextValue {
   user: User | null;
+  /**
+   * No longer an actual JWT — the real access token lives in an httpOnly
+   * cookie the frontend can never read. This is now just a truthy/falsy
+   * "is there an authenticated session right now" flag, kept under the
+   * same name and shape so the many `if (!accessToken) return` guards
+   * scattered across the app (gating API calls and socket joins on "are we
+   * logged in yet") keep working unchanged. Nothing anywhere reads this
+   * value's actual contents, only its truthiness.
+   */
   accessToken: string | null;
   /** True while the initial "am I already logged in?" check on page load is running. */
   isLoading: boolean;
@@ -25,32 +29,7 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const STORAGE_KEY = "fluxboard_auth_tokens";
-
-/**
- * Reads persisted tokens from localStorage. Wrapped in try/catch because
- * localStorage can throw in some environments (private browsing in older
- * Safari, SSR where `window` doesn't exist yet) — a missing/corrupt value
- * should just mean "not logged in", not crash the app.
- */
-function loadStoredTokens(): AuthTokens | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function storeTokens(tokens: AuthTokens | null) {
-  if (typeof window === "undefined") return;
-  if (tokens) {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(tokens));
-  } else {
-    window.localStorage.removeItem(STORAGE_KEY);
-  }
-}
+const SESSION_FLAG = "authenticated"; // sentinel value — see the accessToken doc comment above
 
 /**
  * Wraps the whole app (added in layout.tsx) so any component can call
@@ -64,35 +43,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // On first load, check localStorage for a previously saved token and
-  // verify it's still valid by fetching the current user. This is what
-  // keeps someone logged in across a page refresh.
+  // On first load, just ask the API who we are — the browser attaches the
+  // httpOnly accessToken cookie automatically if one exists (see
+  // apiClient's `credentials: "include"`), so there's nothing to read out
+  // of localStorage first the way there used to be. A 401 here just means
+  // "not logged in", not an error to report — the person lands on /login
+  // the same as anyone else with no session.
   useEffect(() => {
-    const stored = loadStoredTokens();
-    if (!stored) {
-      setIsLoading(false);
-      return;
-    }
-
-    apiFetch<User>("/auth/me", { accessToken: stored.accessToken })
+    apiFetch<User>("/auth/me")
       .then((fetchedUser) => {
         setUser(fetchedUser);
-        setAccessToken(stored.accessToken);
+        setAccessToken(SESSION_FLAG);
       })
       .catch(() => {
-        // Stored token is expired/invalid — clear it rather than leaving
-        // stale, unusable tokens sitting in localStorage.
-        storeTokens(null);
+        // Not logged in (or the one-time refresh apiFetch already
+        // attempted internally also failed) — nothing to clean up, since
+        // there's no local token storage left to clear.
       })
       .finally(() => setIsLoading(false));
   }, []);
 
-  // Whenever we have a valid access token — on initial load, after login,
-  // after signup — (re)identify the shared socket connection so personal
-  // notifications (like "you were removed from a workspace") reach this
-  // client even when it isn't currently looking at that workspace/board.
+  // Connects the shared socket once we know we're authenticated. No
+  // separate "identify" call is needed — the socket.io handshake carries
+  // the same httpOnly cookie automatically (see lib/socket.ts), so simply
+  // having an open connection at all is sufficient once accessToken is
+  // truthy.
   useEffect(() => {
-    if (accessToken) identifySocket(accessToken);
+    if (accessToken) getSocket();
   }, [accessToken]);
 
   // The one truly global real-time listener in the app: no matter which
@@ -134,38 +111,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // the auth pages themselves — both guard against a malformed or
     // tampered redirect param sending the user somewhere unintended or
     // into a login<->redirect loop.
-    if (redirect && redirect.startsWith("/") && !redirect.startsWith("//") && !redirect.startsWith("/login") && !redirect.startsWith("/signup")) {
+    if (
+      redirect &&
+      redirect.startsWith("/") &&
+      !redirect.startsWith("//") &&
+      !redirect.startsWith("/login") &&
+      !redirect.startsWith("/signup")
+    ) {
       return redirect;
     }
     return "/workspaces";
   }
 
   async function login(email: string, password: string) {
-    const result = await apiFetch<{ user: User; accessToken: string; refreshToken: string }>(
-      "/auth/login",
-      { method: "POST", body: { email, password } }
-    );
+    // The response body only contains the user profile now — both tokens
+    // are set as httpOnly cookies directly by the server's Set-Cookie
+    // headers, never present in JSON the frontend could read.
+    const result = await apiFetch<{ user: User }>("/auth/login", {
+      method: "POST",
+      body: { email, password },
+    });
     setUser(result.user);
-    setAccessToken(result.accessToken);
-    storeTokens({ accessToken: result.accessToken, refreshToken: result.refreshToken });
+    setAccessToken(SESSION_FLAG);
     router.push(getPostAuthRedirect());
   }
 
   async function signup(email: string, password: string, displayName: string) {
-    const result = await apiFetch<{ user: User; accessToken: string; refreshToken: string }>(
-      "/auth/signup",
-      { method: "POST", body: { email, password, displayName } }
-    );
+    const result = await apiFetch<{ user: User }>("/auth/signup", {
+      method: "POST",
+      body: { email, password, displayName },
+    });
     setUser(result.user);
-    setAccessToken(result.accessToken);
-    storeTokens({ accessToken: result.accessToken, refreshToken: result.refreshToken });
+    setAccessToken(SESSION_FLAG);
     router.push(getPostAuthRedirect());
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      // Clears both cookies server-side — unlike localStorage, an httpOnly
+      // cookie can't just be deleted client-side, so this request is what
+      // actually ends the session rather than merely hiding it from this
+      // one tab.
+      await apiFetch("/auth/logout", { method: "POST" });
+    } catch (err) {
+      // Even if this call fails (e.g. the API is briefly unreachable),
+      // still proceed with clearing local state below — a stuck "can't
+      // log out" experience would be worse than a cookie that outlives
+      // this particular attempt and simply expires on its own later.
+    }
     setUser(null);
     setAccessToken(null);
-    storeTokens(null);
     disconnectSocket();
     router.push("/login");
   }

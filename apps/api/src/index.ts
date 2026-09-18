@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import jwt from "jsonwebtoken";
 import { createServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
@@ -12,12 +13,21 @@ import workspaceRoutes from "./routes/workspaceRoutes";
 import boardRoutes from "./routes/boardRoutes";
 import listRoutes from "./routes/listRoutes";
 import cardRoutes from "./routes/cardRoutes";
+import commentRoutes from "./routes/commentRoutes";
 
 const PORT = process.env.PORT || 4000;
+const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:3000";
 
 const app = express();
 app.use(express.json());
-app.use(cors());
+app.use(cookieParser());
+// `credentials: true` is required for the browser to actually attach the
+// httpOnly auth cookies on cross-origin requests (the frontend and API
+// run on different ports/origins in dev, and typically different
+// subdomains in production) — and a credentialed request can't use the
+// wildcard "*" origin, so this must be a specific, exact origin rather
+// than left as the previous no-argument cors() default.
+app.use(cors({ origin: WEB_ORIGIN, credentials: true }));
 
 // Registered before any auth-protected router, since those routers apply
 // requireAuth unconditionally (router.use with no path matches every
@@ -33,40 +43,43 @@ app.use(workspaceRoutes);
 app.use(boardRoutes);
 app.use(listRoutes);
 app.use(cardRoutes);
+app.use(commentRoutes);
 
 // Socket.io needs the raw http.Server, not the Express app directly, so it
 // can upgrade HTTP connections to WebSocket connections.
 const httpServer = createServer(app);
 const io = new SocketIOServer(httpServer, {
-  cors: { origin: process.env.WEB_ORIGIN || "http://localhost:3000" },
+  cors: { origin: WEB_ORIGIN, credentials: true },
 });
 
 io.on("connection", (socket) => {
   console.log(`[socket] client connected: ${socket.id}`);
 
-  // A socket starts out anonymous. The client sends its access token here
-  // right after connecting — once verified, we join a personal
-  // `user:<id>` room, which is how server-initiated events that aren't
-  // tied to a board/workspace the user has open (e.g. "you've been
-  // removed from a workspace") still reach them.
-  socket.on("identify", (accessToken: string) => {
-    const userId = verifyAccessToken(accessToken);
-    if (!userId) return; // invalid/expired token — socket just stays anonymous
+  // Identify the connection right away using the accessToken cookie sent
+  // with the socket.io handshake (the initial HTTP request Socket.io
+  // makes before upgrading to a WebSocket) — the browser attaches it
+  // automatically for the same reason it does on any other request to
+  // this origin, since the cookie's path ("/") covers this too. This
+  // replaces an earlier design where the client had to explicitly emit
+  // its access token after connecting: that could only ever work when the
+  // token was something JS-readable in the first place (localStorage), and
+  // reading it here instead means every socket is identified synchronously
+  // at connection time, with no separate step and no race between
+  // "connected" and "identified" for the rest of this file to worry about.
+  const userId = getUserIdFromHandshake(socket.handshake.headers.cookie);
+  if (userId) {
     socket.data.userId = userId;
     socket.join(`user:${userId}`);
-  });
+  }
 
   // Clients join a per-board "room" so events only reach people actually
   // looking at that board, not every connected client on the whole app.
-  // Membership is verified here using the access token sent alongside the
-  // boardId — deliberately NOT relying on a prior "identify" call having
-  // already completed, since that's a separate, independently-timed step
-  // (the client's auth state and this join call can race on a fresh page
-  // load) and silently failing to join would break real-time sync
-  // entirely rather than just missing a personal notification.
-  socket.on("join-board", async ({ boardId, accessToken }: { boardId: string; accessToken: string }) => {
-    const userId = verifyAccessToken(accessToken);
-    if (!(await socketCanAccessBoard(userId, boardId))) return;
+  // Membership is checked using socket.data.userId set above — if the
+  // connection wasn't identified (no valid cookie at handshake time), this
+  // silently declines to join rather than trusting an unauthenticated
+  // socket with a bare boardId.
+  socket.on("join-board", async (boardId: string) => {
+    if (!(await socketCanAccessBoard(socket.data.userId, boardId))) return;
     socket.join(`board:${boardId}`);
   });
 
@@ -77,14 +90,10 @@ io.on("connection", (socket) => {
   // Same idea, one level up: the workspace's board-list page joins this
   // room to get live updates when a board is created/renamed/deleted, or
   // when someone is added to or removed from the workspace.
-  socket.on(
-    "join-workspace",
-    async ({ workspaceId, accessToken }: { workspaceId: string; accessToken: string }) => {
-      const userId = verifyAccessToken(accessToken);
-      if (!(await socketIsWorkspaceMember(userId, workspaceId))) return;
-      socket.join(`workspace:${workspaceId}`);
-    }
-  );
+  socket.on("join-workspace", async (workspaceId: string) => {
+    if (!(await socketIsWorkspaceMember(socket.data.userId, workspaceId))) return;
+    socket.join(`workspace:${workspaceId}`);
+  });
 
   socket.on("leave-workspace", (workspaceId: string) => {
     socket.leave(`workspace:${workspaceId}`);
@@ -95,13 +104,29 @@ io.on("connection", (socket) => {
   });
 });
 
-/** Verifies a JWT access token and returns the userId it encodes, or undefined if invalid/missing. */
-function verifyAccessToken(accessToken: string | undefined): string | undefined {
+/**
+ * Extracts and verifies the accessToken cookie from a raw `Cookie` header
+ * string (the shape socket.handshake.headers.cookie comes in as — unlike
+ * Express requests, Socket.io's handshake object isn't run through
+ * cookie-parser, so this small manual parse stands in for that). Returns
+ * the userId it encodes, or undefined if the cookie is missing, malformed,
+ * or the token itself is invalid/expired.
+ */
+function getUserIdFromHandshake(cookieHeader: string | undefined): string | undefined {
+  if (!cookieHeader) return undefined;
+
+  const accessToken = cookieHeader
+    .split(";")
+    .map((pair) => pair.trim())
+    .find((pair) => pair.startsWith("accessToken="))
+    ?.slice("accessToken=".length);
+
   if (!accessToken) return undefined;
+
   try {
     const secret = process.env.JWT_ACCESS_SECRET;
     if (!secret) return undefined;
-    const decoded = jwt.verify(accessToken, secret) as { userId: string };
+    const decoded = jwt.verify(decodeURIComponent(accessToken), secret) as { userId: string };
     return decoded.userId;
   } catch {
     return undefined;

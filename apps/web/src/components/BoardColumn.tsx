@@ -7,17 +7,22 @@ import { TaskCard } from "./TaskCard";
 import { EditableTitle } from "./ui/EditableTitle";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { PlusIcon, TrashIcon, XIcon } from "./ui/icons";
-import type { Card } from "@fluxboard/shared-types";
+import type { Card, WorkspaceMember } from "@fluxboard/shared-types";
 
 interface BoardColumnProps {
   listId: string;
   title: string;
   cards: Card[];
+  members: WorkspaceMember[];
   onAddCard: (listId: string, title: string) => void;
   onDeleteCard: (cardId: string) => void;
   onOpenCard: (card: Card) => void;
   onRenameList: (listId: string, title: string) => Promise<void>;
   onDeleteList: (listId: string) => Promise<void>;
+  /** The CURRENT user's own permissions in this board's workspace — gates the add/rename/delete affordances below. */
+  canAdd: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
 }
 
 /**
@@ -31,11 +36,15 @@ export function BoardColumn({
   listId,
   title,
   cards,
+  members,
   onAddCard,
   onDeleteCard,
   onOpenCard,
   onRenameList,
   onDeleteList,
+  canAdd,
+  canEdit,
+  canDelete,
 }: BoardColumnProps) {
   const { setNodeRef } = useDroppable({ id: `column-${listId}` });
   const [newCardTitle, setNewCardTitle] = useState("");
@@ -61,6 +70,7 @@ export function BoardColumn({
           as="h3"
           value={title}
           onSave={(next) => onRenameList(listId, next)}
+          disabled={!canEdit}
           className="text-sm font-semibold text-slate-700"
           inputClassName="w-full rounded-md border border-brand-300 bg-white px-1.5 py-0.5 text-sm font-semibold text-slate-700 outline-none ring-2 ring-brand-100"
         />
@@ -68,13 +78,15 @@ export function BoardColumn({
           <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[11px] font-medium text-slate-500">
             {cards.length}
           </span>
-          <button
-            onClick={() => setConfirmingDelete(true)}
-            aria-label="Delete list"
-            className="rounded-md p-1 text-slate-400 hover:bg-red-50 hover:text-red-500"
-          >
-            <TrashIcon className="h-3.5 w-3.5" />
-          </button>
+          {canDelete && (
+            <button
+              onClick={() => setConfirmingDelete(true)}
+              aria-label="Delete list"
+              className="rounded-md p-1 text-slate-400 hover:bg-red-50 hover:text-red-500"
+            >
+              <TrashIcon className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -84,12 +96,19 @@ export function BoardColumn({
       >
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((card) => (
-            <TaskCard key={card.id} card={card} onDelete={onDeleteCard} onOpen={onOpenCard} />
+            <TaskCard
+              key={card.id}
+              card={card}
+              members={members}
+              onDelete={onDeleteCard}
+              onOpen={onOpenCard}
+              canDelete={canDelete}
+            />
           ))}
         </SortableContext>
       </div>
 
-      {isAdding ? (
+      {!canAdd ? null : isAdding ? (
         <form onSubmit={handleSubmit} className="mt-2 space-y-1.5">
           <textarea
             autoFocus
