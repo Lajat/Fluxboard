@@ -47,13 +47,24 @@ jobs:
       - name: Run unit tests
         run: pnpm test
 
-      - name: Start API server for integration tests
+      - name: Run API server and integration tests
         run: |
+          # 1. Start the API server in the background
           pnpm --filter @fluxboard/api dev &
-          sleep 5
+          API_PID=$!
 
-      - name: Run integration tests
-        run: pnpm --filter @fluxboard/api test:integration
+          # 2. Wait until the server is responding on port 4000
+          echo "Waiting for API server to start..."
+          until curl -s http://localhost:4000 > /dev/null; do
+            sleep 1
+          done
+          echo "API server is up and running!"
+
+          # 3. Run the integration tests
+          pnpm --filter @fluxboard/api test:integration
+
+          # 4. Clean up the background server process
+          kill $API_PID
         env:
           TEST_BASE_URL: http://localhost:4000
           MONGODB_URI: mongodb://localhost:27017/fluxboard-test
@@ -61,7 +72,7 @@ jobs:
   deploy-api:
     # needs: build-and-test
     # Deploy ONLY when a release is published, ensuring build-and-test passed
-    # if: github.event_name == 'release' && github.event.action == 'published'
+    if: github.event_name == 'release' && github.event.action == 'published'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
