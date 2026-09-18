@@ -68,6 +68,9 @@ jobs:
         env:
           TEST_BASE_URL: http://localhost:4000
           MONGODB_URI: mongodb://localhost:27017/fluxboard-test
+          JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
+          JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+
 
   deploy-api:
     # needs: build-and-test
