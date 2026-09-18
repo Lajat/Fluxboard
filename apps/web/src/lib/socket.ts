@@ -3,6 +3,11 @@ import { io, Socket } from "socket.io-client";
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:4000";
 
 let socket: Socket | null = null;
+// Remembered so we can re-identify automatically after a reconnect (laptop
+// sleep, brief network drop) — the server treats each new connection as
+// anonymous until it re-identifies, so without this a dropped/restored
+// connection would silently stop receiving personal notifications.
+let lastAccessToken: string | null = null;
 
 /**
  * Returns a single shared Socket.io connection for the whole app.
@@ -32,6 +37,10 @@ export function getSocket(): Socket {
       // since it's load-bearing for a real-time board that should recover
       // on its own rather than silently going stale.
       reconnection: true,
+    });
+
+    socket.on("connect", () => {
+      if (lastAccessToken) socket!.emit("identify", lastAccessToken);
     });
   }
   return socket;
