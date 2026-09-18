@@ -26,7 +26,7 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "pnpm"
 
       - name: Install dependencies
@@ -50,7 +50,6 @@ jobs:
       - name: Start API server for integration tests
         run: |
           pnpm --filter @fluxboard/api dev &
-          # Give the server a few seconds to boot up and connect to MongoDB
           sleep 5
 
       - name: Run integration tests
@@ -74,6 +73,12 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
+      - name: Sanitize version label
+        run: |
+          # Replace any slashes in the ref name with hyphens (e.g., 7/merge -> 7-merge)
+          SAFE_REF=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          echo "VERSION_LABEL=fluxboard-$SAFE_REF" >> $GITHUB_ENV
+
       - name: Package deployment bundle
         run: |
           zip -r deploy.zip . \
@@ -88,5 +93,6 @@ jobs:
           application_name: fluxboard-api
           environment_name: fluxboard-api-env
           region: ${{ secrets.AWS_REGION }}
-          version_label: "fluxboard-${{ github.ref_name }}"
+          version_label: ${{ env.VERSION_LABEL }}
+          # version_label: "fluxboard-${{ github.ref_name }}"
           deployment_package: deploy.zip
