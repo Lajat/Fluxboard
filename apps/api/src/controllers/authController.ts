@@ -70,17 +70,27 @@ function issueTokens(userId: string) {
  *    only requests that originate from this app itself.
  */
 function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
+  // sameSite must be "none" in production: the frontend (vercel.app) and
+  // backend (cloudfront.net) are different registrable domains, so every
+  // API call is a cross-site request from the browser's point of view.
+  // "lax"/"strict" both silently block the cookie on cross-site fetch()
+  // calls — only "none" (paired with secure: true, required by spec)
+  // actually gets sent. Locally, frontend and backend share the domain
+  // "localhost" (only the port differs), which the SameSite spec treats
+  // as same-site — so "lax" over plain http still works there.
+  const crossSiteCookieOptions = isProd
+    ? ({ secure: true, sameSite: "none" } as const)
+    : ({ secure: false, sameSite: "lax" } as const);
+
   res.cookie("accessToken", accessToken, {
     httpOnly: true,
-    secure: isProd, // only require HTTPS in production — local dev over plain http still needs the cookie to be sent
-    sameSite: "lax",
+    ...crossSiteCookieOptions,
     maxAge: ACCESS_TOKEN_TTL_MS,
     path: "/",
   });
   res.cookie("refreshToken", refreshToken, {
     httpOnly: true,
-    secure: isProd,
-    sameSite: "strict",
+    ...crossSiteCookieOptions,
     maxAge: REFRESH_TOKEN_TTL_MS,
     path: "/auth/refresh",
   });

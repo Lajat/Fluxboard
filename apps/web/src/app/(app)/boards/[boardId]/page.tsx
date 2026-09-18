@@ -802,22 +802,25 @@ export default function BoardPage() {
             )}
           </div>
 
-          {/* Left fade + arrow — only rendered once there's something to
-              scroll back to. The fade itself shows on every screen size
-              (it's the main mobile cue that the board scrolls, since
-              there's no hover state on touch to reveal anything else);
-              the click-to-scroll arrow button is desktop-only, since
-              swiping is the natural gesture on touch and a floating
-              button there would just be clutter. pointer-events-none on
-              the gradient so it never blocks clicks on the list beneath
-              it — only the button itself is interactive. */}
+          {/* Left/right edge cues + scroll arrows. The edge cue is a
+              soft, low-opacity black shadow — NOT the previous flat
+              slate-50 color panel. That's the actual fix: an opaque
+              background color painted over a card visibly washes it out
+              as it passes underneath (cards are white/bordered, so a
+              solid color panel replaces their color entirely in that
+              strip); a subtle shadow-style gradient (5% black, fading to
+              transparent) barely darkens whatever's beneath it instead of
+              replacing it — still a visible "there's more here" cue, on
+              every screen size (mobile has no hover state, so this is
+              also mobile's persistent equivalent of the buttons below),
+              without the translucent-card side effect. */}
           {canScrollLeft && (
             <>
-              <div className="pointer-events-none absolute inset-y-0 left-0 z-[1] w-8 bg-gradient-to-r from-slate-50 to-transparent sm:w-16" />
+              <div className="pointer-events-none absolute inset-y-0 left-0 z-[1] w-6 bg-gradient-to-r from-black/5 to-transparent sm:w-10" />
               <button
                 onClick={() => scrollByColumn(-1)}
                 aria-label="Scroll lists left"
-                className="absolute left-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-white p-1.5 text-slate-500 shadow-md ring-1 ring-slate-200 transition hover:text-brand-600 sm:flex"
+                className="absolute left-2 top-1/2 z-[1] hidden -translate-y-1/2 rounded-full bg-white p-1.5 text-slate-500 shadow-md ring-1 ring-slate-200 transition hover:text-brand-600 sm:flex"
               >
                 <ChevronLeftIcon className="h-4 w-4" />
               </button>
@@ -826,11 +829,11 @@ export default function BoardPage() {
 
           {canScrollRight && (
             <>
-              <div className="pointer-events-none absolute inset-y-0 right-0 z-[1] w-8 bg-gradient-to-l from-slate-50 to-transparent sm:w-16" />
+              <div className="pointer-events-none absolute inset-y-0 right-0 z-[1] w-6 bg-gradient-to-l from-black/5 to-transparent sm:w-10" />
               <button
                 onClick={() => scrollByColumn(1)}
                 aria-label="Scroll lists right"
-                className="absolute right-2 top-1/2 hidden -translate-y-1/2 rounded-full bg-white p-1.5 text-slate-500 shadow-md ring-1 ring-slate-200 transition hover:text-brand-600 sm:flex"
+                className="absolute right-2 top-1/2 z-[1] hidden -translate-y-1/2 rounded-full bg-white p-1.5 text-slate-500 shadow-md ring-1 ring-slate-200 transition hover:text-brand-600 sm:flex"
               >
                 <ChevronRightIcon className="h-4 w-4" />
               </button>

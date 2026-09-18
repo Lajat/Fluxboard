@@ -39,7 +39,27 @@ export async function createWorkspace(req: Request, res: Response) {
     memberIds: [req.userId],
   });
 
-  res.status(201).json(toWorkspaceResponse(workspace));
+  const workspaceResponse = toWorkspaceResponse(workspace);
+
+  // Without this, the sidebar (which fetches its own independent copy of
+  // the workspace list) never learns a new workspace was created — only
+  // the /workspaces page's own local state did, via the HTTP response
+  // below. Reusing the exact MEMBER_ADDED event/payload shape that
+  // addMember and joinViaInviteLink already emit to a new member's own
+  // room means the sidebar's existing handler picks this up for free,
+  // with no separate "workspace created" event or frontend change needed
+  // — creating a workspace IS adding yourself as its first member.
+  const creator = await UserModel.findById(req.userId);
+  if (creator) {
+    const member = toMemberResponse(creator, workspace);
+    req.app.get("io").to(`user:${req.userId}`).emit(SocketEvents.MEMBER_ADDED, {
+      workspaceId: workspace.id,
+      member,
+      workspace: workspaceResponse,
+    });
+  }
+
+  res.status(201).json(workspaceResponse);
 }
 
 /**
