@@ -8,6 +8,14 @@ export interface CardDocument extends Document {
   assigneeId?: Types.ObjectId;
   dueDate?: Date;
   labels?: string[];
+  priority?: "low" | "medium" | "high";
+  // Human-readable, board-scoped id like "BT-7" — see Board.cardCounter
+  // and lib/taskId.ts for how this is generated. Optional in the type
+  // only because cards created before this feature existed won't have
+  // one; every card created going forward always gets one at creation
+  // time in cardController.createCard, never generated retroactively (a
+  // stable, permanent id is the whole point of it).
+  taskId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -23,6 +31,8 @@ const cardSchema = new Schema<CardDocument>(
     // Kept intentionally simple (no separate Label collection/model) since
     // labels here are per-card tags, not shared/reusable across a board.
     labels: [{ type: String }],
+    priority: { type: String, enum: ["low", "medium", "high"] },
+    taskId: { type: String },
   },
   {
     // Adds and auto-maintains createdAt/updatedAt — no manual bookkeeping

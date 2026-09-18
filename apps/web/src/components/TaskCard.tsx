@@ -2,14 +2,20 @@
 
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { Card, LabelColor } from "@fluxboard/shared-types";
+import type { Card, LabelColor, WorkspaceMember } from "@fluxboard/shared-types";
+import { PRIORITY_META } from "@fluxboard/shared-types";
 import { TrashIcon, CalendarIcon } from "./ui/icons";
-import { LABEL_SWATCH } from "./CardDetailModal";
+import { LABEL_SWATCH, PRIORITY_PILL } from "./CardDetailModal";
+import { avatarColorFor, initialsFor } from "@/lib/avatar";
 
 interface TaskCardProps {
   card: Card;
   onDelete: (cardId: string) => void;
   onOpen?: (card: Card) => void;
+  /** Used to resolve card.assigneeId into a name/avatar — pass an empty array if unavailable, the assignee avatar is simply omitted then. */
+  members?: WorkspaceMember[];
+  /** Whether the current user may delete this card — hides the inline delete button when false. Viewing/opening the card is always allowed regardless. */
+  canDelete?: boolean;
 }
 
 function formatDueDate(iso?: string) {
@@ -34,7 +40,7 @@ function isOverdue(iso?: string) {
  * few pixels of movement / a short hold before a drag "starts", so a
  * simple tap/click is never swallowed as a drag.
  */
-export function TaskCard({ card, onDelete, onOpen }: TaskCardProps) {
+export function TaskCard({ card, onDelete, onOpen, members = [], canDelete = true }: TaskCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
   });
@@ -47,6 +53,7 @@ export function TaskCard({ card, onDelete, onOpen }: TaskCardProps) {
 
   const dueLabel = formatDueDate(card.dueDate);
   const overdue = isOverdue(card.dueDate);
+  const assignee = card.assigneeId ? members.find((m) => m.id === card.assigneeId) : undefined;
 
   return (
     <div
@@ -76,37 +83,67 @@ export function TaskCard({ card, onDelete, onOpen }: TaskCardProps) {
 
       <div className="flex items-start justify-between gap-2">
         <p className="text-sm font-medium leading-snug text-slate-800">{card.title}</p>
-        <button
-          // Stop the click/pointerdown from also starting a drag or
-          // opening the card modal.
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(card.id);
-          }}
-          aria-label="Delete card"
-          // Always visible on touch/small screens (no hover state to
-          // reveal it there); fades in on hover for desktop pointer users.
-          className="shrink-0 rounded-md p-1 text-slate-300 opacity-100 transition hover:bg-red-50 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100"
-        >
-          <TrashIcon className="h-3.5 w-3.5" />
-        </button>
+        {canDelete && (
+          <button
+            // Stop the click/pointerdown from also starting a drag or
+            // opening the card modal.
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(card.id);
+            }}
+            aria-label="Delete card"
+            // Always visible on touch/small screens (no hover state to
+            // reveal it there); fades in on hover for desktop pointer users.
+            className="shrink-0 rounded-md p-1 text-slate-300 opacity-100 transition hover:bg-red-50 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100"
+          >
+            <TrashIcon className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
 
       {card.description && (
         <p className="mt-1 line-clamp-2 text-xs text-slate-500">{card.description}</p>
       )}
 
-      {dueLabel && (
-        <div
-          className={`mt-2 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
-            overdue ? "bg-red-50 text-red-600" : "bg-slate-100 text-slate-500"
-          }`}
+      {card.priority && (
+        <span
+          className={`mt-2 inline-block rounded-full px-2 py-0.5 text-[11px] font-medium ${PRIORITY_PILL[card.priority]}`}
         >
-          <CalendarIcon className="h-3 w-3" />
-          {dueLabel}
-        </div>
+          {PRIORITY_META[card.priority].label}
+        </span>
       )}
+
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          {card.taskId && (
+            <span className="rounded bg-slate-50 px-1.5 py-0.5 font-mono text-[10px] font-medium text-slate-400">
+              {card.taskId}
+            </span>
+          )}
+          {dueLabel && (
+            <div
+              className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
+                overdue ? "bg-red-50 text-red-600" : "bg-slate-100 text-slate-500"
+              }`}
+            >
+              <CalendarIcon className="h-3 w-3" />
+              {dueLabel}
+            </div>
+          )}
+        </div>
+
+        {assignee && (
+          <span
+            title={assignee.displayName}
+            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold text-white ${avatarColorFor(
+              assignee.id
+            )}`}
+          >
+            {initialsFor(assignee.displayName)}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

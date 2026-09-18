@@ -1,10 +1,10 @@
 import { Request, Response } from "express";
 import { ListModel } from "../models/List";
 import { BoardModel } from "../models/Board";
-import { WorkspaceModel } from "../models/Workspace";
 import { CardModel } from "../models/Card";
 import type { List } from "@fluxboard/shared-types";
 import { SocketEvents } from "@fluxboard/shared-types";
+import { getMemberPermissions, isWorkspaceMember, loadWorkspaceForBoard } from "../lib/permissions";
 
 /** Converts a Mongoose ListDocument into the shared `List` shape. */
 function toListResponse(doc: any): List {
@@ -17,24 +17,9 @@ function toListResponse(doc: any): List {
 }
 
 /**
- * Confirms the logged-in user can access the board a list belongs to, by
- * walking board → workspace → membership. Lists don't store workspaceId
- * directly (avoiding a duplicated foreign key that could drift out of sync
- * with the board's own workspaceId), so this always goes through the board.
- */
-async function assertBoardAccess(boardId: string, userId: string) {
-  const board = await BoardModel.findById(boardId);
-  if (!board) return false;
-
-  const workspace = await WorkspaceModel.findById(board.workspaceId);
-  if (!workspace) return false;
-
-  return workspace.memberIds.some((id) => id.toString() === userId);
-}
-
-/**
  * POST /boards/:boardId/lists
- * Creates a new list and appends it to the board's listOrder.
+ * Creates a new list and appends it to the board's listOrder. Requires
+ * "add" permission in the board's workspace.
  */
 export async function createList(req: Request, res: Response) {
   const { boardId } = req.params;
@@ -44,9 +29,13 @@ export async function createList(req: Request, res: Response) {
     return res.status(400).json({ error: "title is required" });
   }
 
-  const hasAccess = await assertBoardAccess(boardId, req.userId!);
-  if (!hasAccess) {
+  const workspace = await loadWorkspaceForBoard(boardId);
+  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
+  if (!permissions) {
     return res.status(404).json({ error: "board not found" });
+  }
+  if (!permissions.canAdd) {
+    return res.status(403).json({ error: "you don't have permission to add lists to this board" });
   }
 
   const list = await ListModel.create({ boardId, title, cardOrder: [] });
@@ -65,13 +54,13 @@ export async function createList(req: Request, res: Response) {
  * GET /boards/:boardId/lists
  * Returns every list on a board, in the board's listOrder (not insertion
  * order) — this is what lets the frontend render columns left-to-right
- * correctly after a reorder.
+ * correctly after a reorder. Plain membership is enough to view.
  */
 export async function listListsForBoard(req: Request, res: Response) {
   const { boardId } = req.params;
 
-  const hasAccess = await assertBoardAccess(boardId, req.userId!);
-  if (!hasAccess) {
+  const workspace = await loadWorkspaceForBoard(boardId);
+  if (!workspace || !isWorkspaceMember(workspace, req.userId!)) {
     return res.status(404).json({ error: "board not found" });
   }
 
@@ -83,10 +72,10 @@ export async function listListsForBoard(req: Request, res: Response) {
 
 /**
  * PATCH /boards/:boardId/lists/:listId
- * Renames a list. Kept as its own endpoint (distinct from
- * /lists/reorder above) since the two are triggered by completely
- * different UI actions — one from a drag-and-drop drop, one from an
- * inline rename field — and mixing "reorder the whole board" with
+ * Renames a list — requires "edit" permission. Kept as its own endpoint
+ * (distinct from /lists/reorder below) since the two are triggered by
+ * completely different UI actions — one from a drag-and-drop drop, one
+ * from an inline rename field — and mixing "reorder the whole board" with
  * "rename one list" into a single handler would make both harder to
  * reason about.
  */
@@ -98,9 +87,13 @@ export async function updateList(req: Request, res: Response) {
     return res.status(400).json({ error: "title is required" });
   }
 
-  const hasAccess = await assertBoardAccess(boardId, req.userId!);
-  if (!hasAccess) {
+  const workspace = await loadWorkspaceForBoard(boardId);
+  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
+  if (!permissions) {
     return res.status(404).json({ error: "board not found" });
+  }
+  if (!permissions.canEdit) {
+    return res.status(403).json({ error: "you don't have permission to edit this board" });
   }
 
   const list = await ListModel.findOneAndUpdate(
@@ -125,6 +118,7 @@ export async function updateList(req: Request, res: Response) {
  * Used after a drag-and-drop reorder on the frontend — simpler and less
  * error-prone than a "move list from index X to index Y" endpoint, since
  * the frontend already knows the full desired order after a drop.
+ * Treated as an "edit" action, same permission level as renaming.
  */
 export async function reorderLists(req: Request, res: Response) {
   const { boardId } = req.params;
@@ -134,9 +128,13 @@ export async function reorderLists(req: Request, res: Response) {
     return res.status(400).json({ error: "listOrder must be an array of list ids" });
   }
 
-  const hasAccess = await assertBoardAccess(boardId, req.userId!);
-  if (!hasAccess) {
+  const workspace = await loadWorkspaceForBoard(boardId);
+  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
+  if (!permissions) {
     return res.status(404).json({ error: "board not found" });
+  }
+  if (!permissions.canEdit) {
+    return res.status(403).json({ error: "you don't have permission to edit this board" });
   }
 
   const board = await BoardModel.findByIdAndUpdate(
@@ -165,13 +163,18 @@ export async function reorderLists(req: Request, res: Response) {
 /**
  * DELETE /boards/:boardId/lists/:listId
  * Deletes a list, its cards, and removes it from the board's listOrder.
+ * Requires "delete" permission.
  */
 export async function deleteList(req: Request, res: Response) {
   const { boardId, listId } = req.params;
 
-  const hasAccess = await assertBoardAccess(boardId, req.userId!);
-  if (!hasAccess) {
+  const workspace = await loadWorkspaceForBoard(boardId);
+  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
+  if (!permissions) {
     return res.status(404).json({ error: "board not found" });
+  }
+  if (!permissions.canDelete) {
+    return res.status(403).json({ error: "you don't have permission to delete lists on this board" });
   }
 
   const list = await ListModel.findOneAndDelete({ _id: listId, boardId });

@@ -17,22 +17,24 @@ import {
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
 import { useAuth } from "@/context/AuthContext";
+import { useActiveWorkspace } from "@/context/ActiveWorkspaceContext";
 import { useToast } from "@/components/ui/Toast";
 import { apiFetch, ApiError } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
 import { BoardColumn } from "@/components/BoardColumn";
 import { TaskCard } from "@/components/TaskCard";
-import { CardDetailModal } from "@/components/CardDetailModal";
+import { CardDetailModal, type CardUpdates } from "@/components/CardDetailModal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EditableTitle } from "@/components/ui/EditableTitle";
 import { AvatarStack } from "@/components/ui/AvatarStack";
 import { MembersModal } from "@/components/MembersModal";
 import { ChevronLeftIcon, ChevronRightIcon, TrashIcon, PlusIcon, SpinnerIcon } from "@/components/ui/icons";
-import type { Board, List, Card, Workspace, WorkspaceMember } from "@fluxboard/shared-types";
+import type { Board, List, Card, Workspace, WorkspaceMember, MemberPermissions } from "@fluxboard/shared-types";
 import {
   SocketEvents,
   type CardMovedPayload,
   type WorkspaceMembershipPayload,
+  type MemberPermissionsUpdatedPayload,
 } from "@fluxboard/shared-types";
 
 /**
@@ -63,6 +65,14 @@ export default function BoardPage() {
   const [openCard, setOpenCard] = useState<Card | null>(null);
   const [confirmingBoardDelete, setConfirmingBoardDelete] = useState(false);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const { setActiveWorkspaceId } = useActiveWorkspace();
+
+  // Tell the sidebar which workspace this board belongs to, once we know
+  // it — a board page only has boardId in its URL, so this can't be set
+  // until the board itself has loaded. See ActiveWorkspaceContext.
+  useEffect(() => {
+    if (board?.workspaceId) setActiveWorkspaceId(board.workspaceId);
+  }, [board?.workspaceId, setActiveWorkspaceId]);
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [isMembersModalOpen, setIsMembersModalOpen] = useState(false);
   const [inviteToken, setInviteToken] = useState<string | null>(null);
@@ -71,6 +81,15 @@ export default function BoardPage() {
   // inside a useEffect further down, and hooks can't follow a conditional
   // return.
   const isOwner = !!(workspace && user && workspace.ownerId === user.id);
+  // The current user's own permissions in this board's workspace, derived
+  // from the `members` list we already fetch for the avatar stack. While
+  // `members` hasn't loaded yet, default to full permissions rather than
+  // locking every button — the real enforcement is server-side anyway
+  // (see apps/api/src/lib/permissions.ts), so this is purely a UX default
+  // to avoid a flash of disabled buttons before the fetch resolves.
+  const myPermissions = user
+    ? members.find((m) => m.id === user.id)?.permissions ?? { canAdd: true, canEdit: true, canDelete: true }
+    : { canAdd: false, canEdit: false, canDelete: false };
   // Shown once per board, on mobile only, the first time there's more
   // than fits on screen — the edge fade is a subtle enough cue that a
   // first-time visitor might miss it entirely, so this spells it out
@@ -192,9 +211,9 @@ export default function BoardPage() {
     if (!board?.workspaceId || !accessToken) return;
     const socket = getSocket();
     const workspaceId = board.workspaceId;
-    socket.emit("join-workspace", { workspaceId, accessToken });
+    socket.emit("join-workspace", workspaceId);
     function rejoinWorkspaceOnReconnect() {
-      socket.emit("join-workspace", { workspaceId, accessToken });
+      socket.emit("join-workspace", workspaceId);
     }
     socket.on("connect", rejoinWorkspaceOnReconnect);
 
@@ -231,11 +250,17 @@ export default function BoardPage() {
       setMembers((prev) => prev.filter((m) => m.id !== userId));
     }
 
+    function handleMemberPermissionsUpdated({ workspaceId: wsId, member }: MemberPermissionsUpdatedPayload) {
+      if (wsId !== workspaceId) return;
+      setMembers((prev) => prev.map((m) => (m.id === member.id ? member : m)));
+    }
+
     socket.on(SocketEvents.BOARD_UPDATED, handleBoardUpdated);
     socket.on(SocketEvents.BOARD_DELETED, handleBoardDeleted);
     socket.on(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
     socket.on(SocketEvents.MEMBER_ADDED, handleMemberAdded);
     socket.on(SocketEvents.MEMBER_REMOVED, handleMemberRemoved);
+    socket.on(SocketEvents.MEMBER_PERMISSIONS_UPDATED, handleMemberPermissionsUpdated);
 
     return () => {
       socket.emit("leave-workspace", workspaceId);
@@ -245,6 +270,7 @@ export default function BoardPage() {
       socket.off(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
       socket.off(SocketEvents.MEMBER_ADDED, handleMemberAdded);
       socket.off(SocketEvents.MEMBER_REMOVED, handleMemberRemoved);
+      socket.off(SocketEvents.MEMBER_PERMISSIONS_UPDATED, handleMemberPermissionsUpdated);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [board?.workspaceId, boardId, accessToken]);
@@ -256,13 +282,13 @@ export default function BoardPage() {
   useEffect(() => {
     if (!accessToken) return;
     const socket = getSocket();
-    socket.emit("join-board", { boardId, accessToken });
+    socket.emit("join-board", boardId);
     // Room membership lives on the server-side connection and is wiped
     // out on every disconnect — a dropped wifi connection or a laptop
     // waking from sleep silently reconnects the underlying socket but
     // leaves it in no rooms at all unless we explicitly rejoin here.
     function rejoinOnReconnect() {
-      socket.emit("join-board", { boardId, accessToken });
+      socket.emit("join-board", boardId);
     }
     socket.on("connect", rejoinOnReconnect);
 
@@ -426,6 +452,19 @@ export default function BoardPage() {
     }
   }
 
+  async function handleUpdateMemberPermissions(member: WorkspaceMember, updates: Partial<MemberPermissions>) {
+    if (!board) return;
+    try {
+      const res = await apiFetch<{ member: WorkspaceMember }>(
+        `/workspaces/${board.workspaceId}/members/${member.id}/permissions`,
+        { method: "PATCH", accessToken, body: updates }
+      );
+      setMembers((prev) => prev.map((m) => (m.id === res.member.id ? res.member : m)));
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : "Failed to update permissions", "error");
+    }
+  }
+
   // Lazily fetch the invite link only once the owner actually opens the
   // members modal — see the identical pattern (and full reasoning) on the
   // workspace boards-list page.
@@ -524,10 +563,7 @@ export default function BoardPage() {
     }
   }
 
-  async function handleSaveCard(
-    cardId: string,
-    updates: { title: string; description: string; dueDate: string | null; labels: string[] }
-  ) {
+  async function handleSaveCard(cardId: string, updates: CardUpdates) {
     try {
       const updated = await apiFetch<Card>(`/cards/${cardId}`, {
         method: "PATCH",
@@ -652,6 +688,7 @@ export default function BoardPage() {
               as="h1"
               value={board?.title ?? ""}
               onSave={handleRenameBoard}
+              disabled={!myPermissions.canEdit}
               className="text-xl font-bold text-slate-900 sm:text-2xl"
               inputClassName="w-full max-w-md rounded-md border border-brand-300 bg-white px-2 py-1 text-xl font-bold text-slate-900 outline-none ring-2 ring-brand-100 sm:text-2xl"
             />
@@ -669,13 +706,15 @@ export default function BoardPage() {
                 size="sm"
               />
             )}
-            <button
-              onClick={() => setConfirmingBoardDelete(true)}
-              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-slate-400 hover:bg-red-50 hover:text-red-500"
-            >
-              <TrashIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Delete board</span>
-            </button>
+            {myPermissions.canDelete && (
+              <button
+                onClick={() => setConfirmingBoardDelete(true)}
+                className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-slate-400 hover:bg-red-50 hover:text-red-500"
+              >
+                <TrashIcon className="h-4 w-4" />
+                <span className="hidden sm:inline">Delete board</span>
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -700,14 +739,19 @@ export default function BoardPage() {
                 listId={list.id}
                 title={list.title}
                 cards={list.cardOrder.map((id) => cardsById[id]).filter(Boolean)}
+                members={members}
                 onAddCard={handleAddCard}
                 onDeleteCard={handleDeleteCard}
                 onOpenCard={setOpenCard}
                 onRenameList={handleRenameList}
                 onDeleteList={handleDeleteList}
+                canAdd={myPermissions.canAdd}
+                canEdit={myPermissions.canEdit}
+                canDelete={myPermissions.canDelete}
               />
             ))}
 
+            {myPermissions.canAdd && (
             <div className="board-column-snap w-[85vw] shrink-0 sm:w-72">
               {isAddingList ? (
                 <form onSubmit={handleCreateList} className="rounded-xl bg-white p-2.5 shadow-sm ring-1 ring-slate-200">
@@ -755,6 +799,7 @@ export default function BoardPage() {
                 </button>
               )}
             </div>
+            )}
           </div>
 
           {/* Left fade + arrow — only rendered once there's something to
@@ -813,9 +858,12 @@ export default function BoardPage() {
 
       <CardDetailModal
         card={openCard}
+        members={members}
         onClose={() => setOpenCard(null)}
         onSave={handleSaveCard}
         onDelete={handleDeleteCard}
+        canEdit={myPermissions.canEdit}
+        canDelete={myPermissions.canDelete}
       />
 
       <ConfirmDialog
@@ -836,6 +884,7 @@ export default function BoardPage() {
           currentUserId={user.id}
           onInvite={handleInviteMember}
           onRemove={handleRemoveMember}
+          onUpdatePermissions={handleUpdateMemberPermissions}
           inviteLink={
             inviteToken && typeof window !== "undefined"
               ? `${window.location.origin}/invite/${inviteToken}`

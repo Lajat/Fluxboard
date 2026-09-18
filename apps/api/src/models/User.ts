@@ -16,6 +16,12 @@ export interface UserDocument extends Document {
   passwordHash: string;
   displayName: string;
   avatarUrl?: string;
+  // Password-reset token + its expiry — both unset except during the
+  // brief window between requesting a reset and actually using it (or
+  // until it expires unused). See authController's forgotPassword /
+  // resetPassword for the full flow.
+  resetToken?: string;
+  resetTokenExpiresAt?: Date;
   createdAt: Date;
 }
 
@@ -24,6 +30,8 @@ const userSchema = new Schema<UserDocument>({
   passwordHash: { type: String, required: true },
   displayName: { type: String, required: true, trim: true },
   avatarUrl: { type: String },
+  resetToken: { type: String, index: true, sparse: true },
+  resetTokenExpiresAt: { type: Date },
   createdAt: { type: Date, default: Date.now },
 });
 

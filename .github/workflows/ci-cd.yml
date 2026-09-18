@@ -1,0 +1,112 @@
+name: Build, Test, Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      mongodb:
+        image: mongo:latest
+        ports:
+          - 27017:27017
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared-types
+        run: pnpm --filter @fluxboard/shared-types build
+
+      - name: Build API
+        run: pnpm --filter @fluxboard/api build
+
+      - name: Typecheck web (Next.js build)
+        run: pnpm --filter @fluxboard/web build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:4000
+          NEXT_PUBLIC_SOCKET_URL: http://localhost:4000
+
+      - name: Run unit tests
+        run: pnpm test
+
+      - name: Run API server and integration tests
+        run: |
+          # 1. Start the API server in the background
+          pnpm --filter @fluxboard/api dev &
+          API_PID=$!
+
+          # 2. Wait until the server is responding on port 4000
+          echo "Waiting for API server to start..."
+          until curl -s http://localhost:4000 > /dev/null; do
+            sleep 1
+          done
+          echo "API server is up and running!"
+
+          # 3. Run the integration tests
+          pnpm --filter @fluxboard/api test:integration
+
+          # 4. Clean up the background server process
+          kill $API_PID
+        env:
+          TEST_BASE_URL: http://localhost:4000
+          MONGODB_URI: mongodb://localhost:27017/fluxboard-test
+          JWT_ACCESS_SECRET: ${{ secrets.JWT_ACCESS_SECRET }}
+          JWT_REFRESH_SECRET: ${{ secrets.JWT_REFRESH_SECRET }}
+
+
+  deploy-api:
+    needs: build-and-test
+    # Deploy ONLY when a release is published, ensuring build-and-test passed
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Sanitize version label
+        run: |
+          # Replace any slashes in the ref name with hyphens (e.g., 7/merge -> 7-merge)
+          SAFE_REF=$(echo "${{ github.ref_name }}" | tr '/' '-')
+          echo "VERSION_LABEL=fluxboard-$SAFE_REF" >> $GITHUB_ENV
+
+      - name: Package deployment bundle
+        run: |
+          zip -r deploy.zip . \
+            -x "node_modules/*" -x "apps/web/*" -x ".git/*" \
+            -x ".next/*" -x "*/dist/*" -x "*.env" -x "*.log"
+
+      - name: Deploy to Elastic Beanstalk
+        uses: einaregilsson/beanstalk-deploy@v22
+        with:
+          aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          application_name: fluxboard-api
+          environment_name: fluxboard-api-env
+          region: ${{ secrets.AWS_REGION }}
+          version_label: ${{ env.VERSION_LABEL }}
+          # version_label: "fluxboard-${{ github.ref_name }}"
+          deployment_package: deploy.zip

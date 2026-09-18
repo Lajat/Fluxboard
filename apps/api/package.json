@@ -6,7 +6,8 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "jest"
+    "test": "jest --passWithNoTests",
+    "test:integration": "node --import tsx test/auth.integration.ts"
   },
   "dependencies": {
     "@fluxboard/shared-types": "workspace:*",
@@ -16,6 +17,7 @@
     "jsonwebtoken": "^9.0.2",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
+    "cookie-parser": "^1.4.6",
     "dotenv": "^16.4.5"
   },
   "devDependencies": {
@@ -26,9 +28,12 @@
     "@types/jsonwebtoken": "^9.0.6",
     "@types/bcrypt": "^5.0.2",
     "@types/cors": "^2.8.17",
+    "@types/cookie-parser": "^1.4.7",
     "jest": "^29.7.0",
     "@types/jest": "^29.5.12",
     "supertest": "^7.0.0",
-    "@types/supertest": "^6.0.2"
+    "@types/supertest": "^6.0.2",
+    "ts-jest": "^29.1.2",
+    "ts-node": "^10.9.2"
   }
 }

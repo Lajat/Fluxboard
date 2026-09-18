@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { ApiError } from "@/lib/apiClient";
 import { emailError as getEmailError } from "@/lib/validation";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 import { LayoutIcon, SpinnerIcon } from "@/components/ui/icons";
 
 type Touched = { email?: boolean; password?: boolean };
@@ -50,7 +51,7 @@ export default function LoginPage() {
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-sm">
             <LayoutIcon className="h-6 w-6" />
           </div>
-          <span className="text-sm font-semibold tracking-tight text-slate-400">Fluxboard</span>
+          <span className="text-sm font-semibold tracking-tight text-slate-400">fluxboard</span>
         </div>
 
         <div className="rounded-2xl bg-white p-8 shadow-sm ring-1 ring-slate-100">
@@ -81,22 +82,23 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-slate-700">
-                Password
-              </label>
-              <input
+              <div className="flex items-center justify-between">
+                <label htmlFor="password" className="block text-sm font-medium text-slate-700">
+                  Password
+                </label>
+                <Link href="/forgot-password" className="text-xs font-medium text-brand-600 hover:text-brand-700">
+                  Forgot password?
+                </Link>
+              </div>
+              <PasswordInput
                 id="password"
-                type="password"
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 onBlur={() => setTouched((t) => ({ ...t, password: true }))}
                 aria-invalid={touched.password && !!passwordErr}
-                className={`mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none focus:ring-2 ${
-                  touched.password && passwordErr
-                    ? "border-red-300 focus:border-red-400 focus:ring-red-100"
-                    : "border-slate-200 focus:border-brand-400 focus:ring-brand-100"
-                }`}
+                hasError={touched.password && !!passwordErr}
+                wrapperClassName="mt-1"
               />
               {touched.password && passwordErr && (
                 <p className="mt-1 text-xs text-red-600">{passwordErr}</p>

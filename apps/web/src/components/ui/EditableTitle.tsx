@@ -10,6 +10,8 @@ interface EditableTitleProps {
   as?: "h1" | "h2" | "h3" | "span";
   /** Rendered next to the title, e.g. an edit/delete menu — only shown when NOT editing. */
   actions?: ReactNode;
+  /** When true, renders as plain static text — no click-to-edit affordance, no hover cue. Used to gate renaming by permission without needing a second component. */
+  disabled?: boolean;
 }
 
 /**
@@ -25,6 +27,7 @@ export function EditableTitle({
   inputClassName = "",
   as = "span",
   actions,
+  disabled = false,
 }: EditableTitleProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -103,6 +106,7 @@ export function EditableTitle({
     <div className="group/title flex min-w-0 items-center gap-1.5">
       <Tag
         onClick={(e: MouseEvent) => {
+          if (disabled) return;
           // preventDefault/stopPropagation matter here because this title
           // is sometimes rendered inside a clickable <Link> (e.g. a board
           // or workspace tile) — without stopping the event, clicking the
@@ -111,8 +115,10 @@ export function EditableTitle({
           e.stopPropagation();
           setIsEditing(true);
         }}
-        title="Click to rename"
-        className={`min-w-0 cursor-text truncate rounded-md px-1 -mx-1 hover:bg-slate-900/5 ${className}`}
+        title={disabled ? undefined : "Click to rename"}
+        className={`min-w-0 truncate rounded-md px-1 -mx-1 ${
+          disabled ? "" : "cursor-text hover:bg-slate-900/5"
+        } ${className}`}
       >
         {value}
       </Tag>

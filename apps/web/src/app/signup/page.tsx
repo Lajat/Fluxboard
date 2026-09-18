@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { ApiError } from "@/lib/apiClient";
 import { emailError as getEmailError, passwordError as getPasswordError } from "@/lib/validation";
+import { PasswordInput } from "@/components/ui/PasswordInput";
 import { LayoutIcon, SpinnerIcon, CheckIcon } from "@/components/ui/icons";
 
 type Touched = { displayName?: boolean; email?: boolean; password?: boolean; confirmPassword?: boolean };
@@ -106,15 +107,15 @@ export default function SignupPage() {
               <label htmlFor="password" className="block text-sm font-medium text-slate-700">
                 Password
               </label>
-              <input
+              <PasswordInput
                 id="password"
-                type="password"
                 autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 onBlur={() => setTouched((t) => ({ ...t, password: true }))}
                 aria-invalid={touched.password && !!passwordErr}
-                className={fieldClass(!!(touched.password && passwordErr))}
+                hasError={!!(touched.password && passwordErr)}
+                wrapperClassName="mt-1"
               />
               {/* Live checklist instead of a static hint — gives immediate,
                   encouraging feedback as the user types rather than only
@@ -132,15 +133,15 @@ export default function SignupPage() {
               <label htmlFor="confirmPassword" className="block text-sm font-medium text-slate-700">
                 Confirm password
               </label>
-              <input
+              <PasswordInput
                 id="confirmPassword"
-                type="password"
                 autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 onBlur={() => setTouched((t) => ({ ...t, confirmPassword: true }))}
                 aria-invalid={touched.confirmPassword && !!confirmErr}
-                className={fieldClass(!!(touched.confirmPassword && confirmErr))}
+                hasError={!!(touched.confirmPassword && confirmErr)}
+                wrapperClassName="mt-1"
               />
               {touched.confirmPassword && confirmErr && (
                 <p className="mt-1 text-xs text-red-600">{confirmErr}</p>

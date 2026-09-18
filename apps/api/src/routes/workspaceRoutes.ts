@@ -9,6 +9,7 @@ import {
   listMembers,
   addMember,
   removeMember,
+  updateMemberPermissions,
   getInviteLink,
   regenerateInviteLink,
   joinViaInviteLink,
@@ -27,6 +28,7 @@ router.delete("/workspaces/:workspaceId", deleteWorkspace);
 router.get("/workspaces/:workspaceId/members", listMembers);
 router.post("/workspaces/:workspaceId/members", addMember);
 router.delete("/workspaces/:workspaceId/members/:userId", removeMember);
+router.patch("/workspaces/:workspaceId/members/:userId/permissions", updateMemberPermissions);
 router.get("/workspaces/:workspaceId/invite-link", getInviteLink);
 router.post("/workspaces/:workspaceId/invite-link/regenerate", regenerateInviteLink);
 // Not workspace-scoped by id in the URL (the token itself identifies the

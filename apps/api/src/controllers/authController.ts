@@ -1,12 +1,17 @@
 import { Request, Response } from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import { UserModel } from "../models/User";
 import type { User } from "@fluxboard/shared-types";
 
 const SALT_ROUNDS = 10;
-const ACCESS_TOKEN_TTL = "15m"; // short-lived — sent with every request
-const REFRESH_TOKEN_TTL = "30d"; // long-lived — only used to mint new access tokens
+const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000; // 15 minutes — sent with every request
+const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — only used to mint new access tokens
+const ACCESS_TOKEN_TTL_JWT = "15m";
+const REFRESH_TOKEN_TTL_JWT = "30d";
+
+const isProd = process.env.NODE_ENV === "production";
 
 /**
  * Converts a Mongoose UserDocument into the public `User` shape from
@@ -37,15 +42,58 @@ function issueTokens(userId: string) {
     throw new Error("JWT secrets are not configured on the server");
   }
 
-  const accessToken = jwt.sign({ userId }, accessSecret, { expiresIn: ACCESS_TOKEN_TTL });
-  const refreshToken = jwt.sign({ userId }, refreshSecret, { expiresIn: REFRESH_TOKEN_TTL });
+  const accessToken = jwt.sign({ userId }, accessSecret, { expiresIn: ACCESS_TOKEN_TTL_JWT });
+  const refreshToken = jwt.sign({ userId }, refreshSecret, { expiresIn: REFRESH_TOKEN_TTL_JWT });
 
   return { accessToken, refreshToken };
 }
 
 /**
+ * Writes both tokens as httpOnly cookies on the response — this is the
+ * one thing that actually changed in the localStorage → cookie migration:
+ * neither token is ever present in a JSON response body or readable by
+ * frontend JavaScript, which is what closes off the XSS-token-theft path
+ * that localStorage-based storage was exposed to.
+ *
+ * The two cookies deliberately have different scopes:
+ *  - accessToken: path "/" (sent with every request, since every
+ *    authenticated route needs it)
+ *  - refreshToken: path "/auth/refresh" ONLY (sent with nothing else) —
+ *    this means even if an attacker found a way to read response
+ *    headers/cookies for some OTHER endpoint, the long-lived refresh
+ *    token was never exposed there in the first place. Scoping it this
+ *    narrowly is the main extra protection a refresh token gets beyond
+ *    just being httpOnly.
+ *  - sameSite "strict" on the refresh token (vs "lax" on the access
+ *    token) for the same reason: it's the more sensitive of the two, and
+ *    "strict" means it's never sent on a cross-site navigation at all,
+ *    only requests that originate from this app itself.
+ */
+function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
+  res.cookie("accessToken", accessToken, {
+    httpOnly: true,
+    secure: isProd, // only require HTTPS in production — local dev over plain http still needs the cookie to be sent
+    sameSite: "lax",
+    maxAge: ACCESS_TOKEN_TTL_MS,
+    path: "/",
+  });
+  res.cookie("refreshToken", refreshToken, {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: "strict",
+    maxAge: REFRESH_TOKEN_TTL_MS,
+    path: "/auth/refresh",
+  });
+}
+
+function clearAuthCookies(res: Response) {
+  res.clearCookie("accessToken", { path: "/" });
+  res.clearCookie("refreshToken", { path: "/auth/refresh" });
+}
+
+/**
  * POST /auth/signup
- * Creates a new user account and immediately logs them in (returns tokens).
+ * Creates a new user account and immediately logs them in (sets auth cookies).
  */
 export async function signup(req: Request, res: Response) {
   const { email, password, displayName } = req.body;
@@ -69,17 +117,14 @@ export async function signup(req: Request, res: Response) {
   const user = await UserModel.create({ email, passwordHash, displayName });
 
   const { accessToken, refreshToken } = issueTokens(user._id.toString());
+  setAuthCookies(res, accessToken, refreshToken);
 
-  res.status(201).json({
-    user: toUserResponse(user),
-    accessToken,
-    refreshToken,
-  });
+  res.status(201).json({ user: toUserResponse(user) });
 }
 
 /**
  * POST /auth/login
- * Verifies credentials and issues a fresh token pair.
+ * Verifies credentials and sets a fresh pair of auth cookies.
  */
 export async function login(req: Request, res: Response) {
   const { email, password } = req.body;
@@ -104,26 +149,25 @@ export async function login(req: Request, res: Response) {
   }
 
   const { accessToken, refreshToken } = issueTokens(user._id.toString());
+  setAuthCookies(res, accessToken, refreshToken);
 
-  res.json({
-    user: toUserResponse(user),
-    accessToken,
-    refreshToken,
-  });
+  res.json({ user: toUserResponse(user) });
 }
 
 /**
  * POST /auth/refresh
- * Exchanges a valid refresh token for a new access token (and a rotated
- * refresh token, following refresh-token-rotation best practice — every use
- * of a refresh token invalidates it in favor of a new one, which limits the
- * damage if a refresh token is ever stolen).
+ * Exchanges the refreshToken cookie for a new pair of tokens (rotated —
+ * every use of a refresh token invalidates it in favor of a new one,
+ * limiting the damage if one is ever stolen), written back as cookies.
+ * The frontend calls this with no body at all — the refresh token itself
+ * is never something frontend code reads or sends explicitly, since it's
+ * httpOnly and scoped to only be sent to this one path automatically.
  */
 export async function refresh(req: Request, res: Response) {
-  const { refreshToken } = req.body;
+  const refreshToken = req.cookies?.refreshToken;
 
   if (!refreshToken) {
-    return res.status(400).json({ error: "refreshToken is required" });
+    return res.status(401).json({ error: "no refresh token" });
   }
 
   const refreshSecret = process.env.JWT_REFRESH_SECRET;
@@ -134,10 +178,24 @@ export async function refresh(req: Request, res: Response) {
   try {
     const decoded = jwt.verify(refreshToken, refreshSecret) as { userId: string };
     const tokens = issueTokens(decoded.userId);
-    res.json(tokens);
+    setAuthCookies(res, tokens.accessToken, tokens.refreshToken);
+    res.json({ success: true });
   } catch (err) {
+    clearAuthCookies(res); // an invalid/expired refresh token can't be used again — don't leave a dead cookie sitting there
     res.status(401).json({ error: "invalid or expired refresh token" });
   }
+}
+
+/**
+ * POST /auth/logout
+ * Clears both auth cookies server-side. Plain localStorage-based logout
+ * could just delete a browser-side value and be done; httpOnly cookies
+ * are invisible to JavaScript by design, so clearing them has to be a
+ * request the server responds to with a Set-Cookie that expires them.
+ */
+export async function logout(req: Request, res: Response) {
+  clearAuthCookies(res);
+  res.json({ success: true });
 }
 
 /**
@@ -151,4 +209,77 @@ export async function getCurrentUser(req: Request, res: Response) {
     return res.status(404).json({ error: "user not found" });
   }
   res.json(toUserResponse(user));
+}
+
+const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+/**
+ * POST /auth/forgot-password
+ * Generates a one-time, expiring password-reset token.
+ *
+ * NOTE on this being a portfolio project rather than a production app:
+ * a real implementation would email the reset link and always return the
+ * exact same generic response regardless of whether the account exists,
+ * to avoid leaking "is this email registered?" to an attacker. This
+ * project has no email-sending infrastructure connected, so instead the
+ * link is returned directly in the response when the account exists — the
+ * frontend displays it on-screen with a note that production would send
+ * it by email instead. Not sending it back for a nonexistent email at
+ * least avoids the most direct enumeration vector, even without a mail
+ * service to fully close the gap.
+ */
+export async function forgotPassword(req: Request, res: Response) {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: "email is required" });
+  }
+
+  const user = await UserModel.findOne({ email: email.toLowerCase() });
+
+  if (!user) {
+    return res.json({
+      message: "If an account exists with that email, a reset link has been generated below.",
+    });
+  }
+
+  user.resetToken = crypto.randomBytes(32).toString("hex");
+  user.resetTokenExpiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
+  await user.save();
+
+  res.json({
+    message: "Reset link generated.",
+    resetToken: user.resetToken,
+  });
+}
+
+/**
+ * POST /auth/reset-password
+ * Consumes a reset token (from forgotPassword above) and sets a new
+ * password. The token is single-use — cleared immediately after a
+ * successful reset — and expires after an hour even if unused.
+ */
+export async function resetPassword(req: Request, res: Response) {
+  const { token, newPassword } = req.body;
+
+  if (!token || !newPassword) {
+    return res.status(400).json({ error: "token and newPassword are required" });
+  }
+
+  if (newPassword.length < 8) {
+    return res.status(400).json({ error: "password must be at least 8 characters" });
+  }
+
+  const user = await UserModel.findOne({ resetToken: token });
+
+  if (!user || !user.resetTokenExpiresAt || user.resetTokenExpiresAt.getTime() < Date.now()) {
+    return res.status(400).json({ error: "this reset link is invalid or has expired" });
+  }
+
+  user.passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+  user.resetToken = undefined;
+  user.resetTokenExpiresAt = undefined;
+  await user.save();
+
+  res.json({ success: true });
 }

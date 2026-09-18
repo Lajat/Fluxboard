@@ -1,11 +1,6 @@
 /**
  * Basic tests for the auth flow: signup → login → refresh → /auth/me.
- * Run with: node --loader tsx test/auth.test.ts (or via `pnpm test` once
- * a proper Jest/Supertest harness is wired to a test database).
- *
- * Note: these assume the API is already running against a test MongoDB
- * instance — they are integration tests, not isolated unit tests, matching
- * the same style used in resilient-stack's test.js files.
+ * Updated to match the secure httpOnly cookie architecture.
  */
 import assert from "assert";
 
@@ -17,6 +12,18 @@ async function run() {
   const testEmail = `test-${Date.now()}@example.com`;
   const testPassword = "test-password-123";
 
+  let cookieHeader = "";
+
+  // Helper to accumulate cookies from fetch responses
+  function extractCookies(res: Response) {
+    const rawCookie = res.headers.get("set-cookie");
+    if (rawCookie) {
+      // Split multiple cookies if present and extract key-value pairs
+      const cookies = rawCookie.split(/,\s*(?=[^;]+=)/).map(c => c.split(";")[0]).join("; ");
+      cookieHeader = cookies;
+    }
+  }
+
   // SIGNUP
   let res = await fetch(`${BASE}/auth/signup`, {
     method: "POST",
@@ -24,10 +31,10 @@ async function run() {
     body: JSON.stringify({ email: testEmail, password: testPassword, displayName: "Test User" }),
   });
   assert.strictEqual(res.status, 201, "expected 201 on signup");
+  extractCookies(res);
   const signupBody = await res.json();
-  assert.ok(signupBody.accessToken, "signup should return an accessToken");
-  assert.ok(signupBody.refreshToken, "signup should return a refreshToken");
-  console.log("✓ POST /auth/signup creates a user and returns tokens");
+  assert.ok(signupBody.user, "signup should return a user object");
+  console.log("✓ POST /auth/signup creates a user and sets cookies");
 
   // DUPLICATE SIGNUP should fail
   res = await fetch(`${BASE}/auth/signup`, {
@@ -45,9 +52,10 @@ async function run() {
     body: JSON.stringify({ email: testEmail, password: testPassword }),
   });
   assert.strictEqual(res.status, 200, "expected 200 on login");
+  extractCookies(res);
   const loginBody = await res.json();
-  assert.ok(loginBody.accessToken, "login should return an accessToken");
-  console.log("✓ POST /auth/login returns tokens for valid credentials");
+  assert.ok(loginBody.user, "login should return a user object");
+  console.log("✓ POST /auth/login returns user profile and sets cookies");
 
   // LOGIN with wrong password
   res = await fetch(`${BASE}/auth/login`, {
@@ -58,30 +66,30 @@ async function run() {
   assert.strictEqual(res.status, 401, "expected 401 on wrong password");
   console.log("✓ POST /auth/login rejects an incorrect password");
 
-  // /auth/me with a valid access token
+  // /auth/me with valid cookies
   res = await fetch(`${BASE}/auth/me`, {
-    headers: { Authorization: `Bearer ${loginBody.accessToken}` },
+    headers: { Cookie: cookieHeader },
   });
-  assert.strictEqual(res.status, 200, "expected 200 on /auth/me with valid token");
+  assert.strictEqual(res.status, 200, "expected 200 on /auth/me with valid cookies");
   const meBody = await res.json();
   assert.strictEqual(meBody.email, testEmail);
   console.log("✓ GET /auth/me returns the logged-in user's profile");
 
-  // /auth/me with no token
+  // /auth/me with no cookies
   res = await fetch(`${BASE}/auth/me`);
-  assert.strictEqual(res.status, 401, "expected 401 with no Authorization header");
-  console.log("✓ GET /auth/me rejects requests with no token");
+  assert.strictEqual(res.status, 401, "expected 401 with no cookies");
+  console.log("✓ GET /auth/me rejects requests with no cookies");
 
   // REFRESH
   res = await fetch(`${BASE}/auth/refresh`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ refreshToken: loginBody.refreshToken }),
+    headers: { Cookie: cookieHeader },
   });
   assert.strictEqual(res.status, 200, "expected 200 on refresh");
+  extractCookies(res);
   const refreshBody = await res.json();
-  assert.ok(refreshBody.accessToken, "refresh should return a new accessToken");
-  console.log("✓ POST /auth/refresh returns a new token pair");
+  assert.strictEqual(refreshBody.success, true, "refresh should return success true");
+  console.log("✓ POST /auth/refresh rotates tokens successfully");
 
   console.log("\nAll auth tests passed.");
 }
