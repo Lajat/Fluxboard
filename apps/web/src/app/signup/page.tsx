@@ -7,6 +7,7 @@ import { ApiError } from "@/lib/apiClient";
 import { emailError as getEmailError, passwordError as getPasswordError } from "@/lib/validation";
 import { PasswordInput } from "@/components/ui/PasswordInput";
 import { LayoutIcon, SpinnerIcon, CheckIcon } from "@/components/ui/icons";
+import { APP_NAME } from "@/lib/constants";
 
 type Touched = { displayName?: boolean; email?: boolean; password?: boolean; confirmPassword?: boolean };
 
@@ -60,7 +61,7 @@ export default function SignupPage() {
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-sm">
             <LayoutIcon className="h-6 w-6" />
           </div>
-          <span className="text-sm font-semibold tracking-tight text-slate-400">Fluxboard</span>
+          <span className="text-sm font-semibold tracking-tight text-slate-400">{APP_NAME}</span>
         </div>
 
         <div className="rounded-2xl bg-white p-8 shadow-sm ring-1 ring-slate-100">

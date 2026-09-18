@@ -7,6 +7,7 @@ import { useAuth } from "@/context/AuthContext";
 import { apiFetch, ApiError } from "@/lib/apiClient";
 import { LayoutIcon, SpinnerIcon, CheckIcon } from "@/components/ui/icons";
 import type { Workspace, WorkspaceMember } from "@fluxboard/shared-types";
+import { APP_NAME } from "@/lib/constants";
 
 type JoinState = "idle" | "joining" | "joined" | "error";
 
@@ -65,7 +66,7 @@ export default function InvitePage() {
           <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-sm">
             <LayoutIcon className="h-6 w-6" />
           </div>
-          <span className="text-sm font-semibold tracking-tight text-slate-400">fluxboard</span>
+          <span className="text-sm font-semibold tracking-tight text-slate-400">{APP_NAME}</span>
         </div>
 
         <div className="rounded-2xl bg-white p-8 text-center shadow-sm ring-1 ring-slate-100">

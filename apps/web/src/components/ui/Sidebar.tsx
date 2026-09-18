@@ -7,6 +7,8 @@ import { useAuth } from "@/context/AuthContext";
 import { useActiveWorkspace } from "@/context/ActiveWorkspaceContext";
 import { apiFetch } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
+import { APP_NAME } from "@/lib/constants";
+import { avatarColorFor, initialsFor } from "@/lib/avatar";
 import {
   LayoutIcon,
   FolderIcon,
@@ -192,7 +194,7 @@ export function Sidebar() {
               <LayoutIcon className="h-4 w-4" />
             </div>
             {!isCollapsed && (
-              <span className="truncate text-sm font-semibold text-slate-800">fluxboard</span>
+              <span className="truncate text-sm font-semibold text-slate-800">{APP_NAME}</span>
             )}
           </Link>
           <button
@@ -202,18 +204,27 @@ export function Sidebar() {
           >
             <XIcon className="h-4 w-4" />
           </button>
-          <button
-            onClick={toggleCollapsed}
-            aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="hidden rounded-md p-1 text-slate-400 hover:bg-slate-100 sm:block"
-          >
-            {isCollapsed ? (
-              <ChevronRightIcon className="h-4 w-4" />
-            ) : (
-              <ChevronLeftIcon className="h-4 w-4" />
-            )}
-          </button>
         </div>
+
+        {/* Collapse/expand handle: a small floating tab on the sidebar's
+            own edge, vertically centered — not squeezed into the header
+            row alongside the logo. At 64px wide when collapsed, the
+            header row has no room for a second interactive element next
+            to the logo without one sitting on top of the other; a
+            separate edge handle (the same pattern VS Code/Notion/Linear
+            use for their collapsible sidebars) sidesteps the cramping
+            entirely rather than trying to fit both into less space. */}
+        <button
+          onClick={toggleCollapsed}
+          aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="absolute -right-3 top-1/2 z-10 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 shadow-sm hover:text-slate-600 sm:flex"
+        >
+          {isCollapsed ? (
+            <ChevronRightIcon className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronLeftIcon className="h-3.5 w-3.5" />
+          )}
+        </button>
 
         <nav className="scrollbar-thin flex-1 overflow-y-auto px-2 py-3">
           {workspaces.map((ws) => {
@@ -242,7 +253,25 @@ export function Sidebar() {
                     title={ws.name}
                     className="flex min-w-0 flex-1 items-center gap-2"
                   >
-                    <FolderIcon className="h-4 w-4 shrink-0" />
+                    {isCollapsed ? (
+                      // Collapsed: every workspace previously rendered as an
+                      // identical plain folder icon — no way to tell them
+                      // apart without hovering each one for its tooltip. A
+                      // colored initial badge (same deterministic
+                      // color-by-id + initials pattern already used for
+                      // user avatars) makes each workspace visually
+                      // distinct at a glance, the way Slack/Notion's
+                      // collapsed workspace switchers do.
+                      <div
+                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold text-white ${avatarColorFor(
+                          ws.id
+                        )}`}
+                      >
+                        {initialsFor(ws.name)}
+                      </div>
+                    ) : (
+                      <FolderIcon className="h-4 w-4 shrink-0" />
+                    )}
                     {!isCollapsed && <span className="truncate font-medium">{ws.name}</span>}
                   </Link>
                 </div>

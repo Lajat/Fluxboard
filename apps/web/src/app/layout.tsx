@@ -2,9 +2,10 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
 import { ToastProvider } from "@/components/ui/Toast";
+import { APP_NAME } from "@/lib/constants";
 
 export const metadata: Metadata = {
-  title: "fluxboard",
+  title: APP_NAME,
   description: "A real-time collaborative Kanban board",
 };
 
