@@ -15,6 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # 1. Install pnpm explicitly
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest # Or specify a pinned version like "9.15.0"
+
       - uses: actions/setup-node@v5
         with:
           node-version: "20"
@@ -41,7 +46,7 @@ jobs:
   deploy-api:
     needs: build-and-test
     # Deploy ONLY when a release is published, ensuring build-and-test passed
-    if: github.event_name == 'release' && github.event.action == 'published'
+    # if: github.event_name == 'release' && github.event.action == 'published'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
