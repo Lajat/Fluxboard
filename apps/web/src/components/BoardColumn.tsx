@@ -23,6 +23,10 @@ interface BoardColumnProps {
   canAdd: boolean;
   canEdit: boolean;
   canDelete: boolean;
+  /** Card ids with a move currently in flight — passed through to each
+   *  TaskCard as isMovePending, disabling drag on that specific card
+   *  until its move finishes (see TaskCard for why this matters). */
+  pendingMoveCardIds: Set<string>;
 }
 
 /**
@@ -45,6 +49,7 @@ export function BoardColumn({
   canAdd,
   canEdit,
   canDelete,
+  pendingMoveCardIds,
 }: BoardColumnProps) {
   const { setNodeRef } = useDroppable({ id: `column-${listId}` });
   const [newCardTitle, setNewCardTitle] = useState("");
@@ -103,6 +108,7 @@ export function BoardColumn({
               onDelete={onDeleteCard}
               onOpen={onOpenCard}
               canDelete={canDelete}
+              isMovePending={pendingMoveCardIds.has(card.id)}
             />
           ))}
         </SortableContext>

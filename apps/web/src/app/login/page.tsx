@@ -11,6 +11,7 @@ import { APP_NAME } from "@/lib/constants";
 
 type Touched = { email?: boolean; password?: boolean };
 
+/** Login form — email/password, redirects to /workspaces on success via useAuth's login(). */
 export default function LoginPage() {
   const { login } = useAuth();
   const [email, setEmail] = useState("");

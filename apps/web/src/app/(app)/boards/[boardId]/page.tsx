@@ -47,6 +47,25 @@ interface ListWithCards extends Omit<List, "cardOrder"> {
   cardOrder: string[];
 }
 
+/**
+ * The Kanban board itself — lists and cards, drag-and-drop (via dnd-kit),
+ * and the live multi-user sync for all of it. A few things worth knowing
+ * before editing this file:
+ *
+ * - Drag-and-drop uses optimistic local updates (see handleDragEnd) for
+ *   an instant-feeling UI, backed by an atomic, self-healing move on the
+ *   server (see moveCard in cardController) — a card is never trusted to
+ *   be "in exactly one list" purely because the frontend thinks so.
+ * - pendingMoveCardIds disables re-dragging a card while its previous
+ *   move is still being persisted — this exists because of a real,
+ *   previously-shipped bug (see BLOG_POST_DRAFT.md) where dragging the
+ *   same card twice in quick succession could get it recorded in two
+ *   lists at once.
+ * - Every socket event handler here is written to be idempotent (safe to
+ *   apply twice) on purpose — this tab's own actions can arrive back via
+ *   both the HTTP response AND the socket broadcast for that same event,
+ *   and both need to agree on the outcome without duplicating anything.
+ */
 export default function BoardPage() {
   const { accessToken, isLoading: authLoading, user } = useAuth();
   const { showToast } = useToast();
@@ -61,6 +80,14 @@ export default function BoardPage() {
   const [isAddingList, setIsAddingList] = useState(false);
   const [listTitleError, setListTitleError] = useState<string | null>(null);
   const [activeCard, setActiveCard] = useState<Card | null>(null);
+  // Tracks card ids with a move request currently in flight. Dragging the
+  // same card again before its previous PATCH /cards/:id/move response
+  // returns is exactly what triggered the duplicate-card database bug
+  // fixed in moveCard — this stops that at the source, on the frontend,
+  // as a first line of defense (the backend fix makes it safe even if
+  // this were somehow bypassed, but preventing the double-request in the
+  // first place is simpler than relying on the race-recovery alone).
+  const [pendingMoveCardIds, setPendingMoveCardIds] = useState<Set<string>>(new Set());
   const [isLoadingBoard, setIsLoadingBoard] = useState(true);
   const [openCard, setOpenCard] = useState<Card | null>(null);
   const [confirmingBoardDelete, setConfirmingBoardDelete] = useState(false);
@@ -650,6 +677,7 @@ export default function BoardPage() {
       return next;
     });
 
+    setPendingMoveCardIds((prev) => new Set(prev).add(activeCardId));
     try {
       await apiFetch(`/cards/${activeCardId}/move`, {
         method: "PATCH",
@@ -662,6 +690,12 @@ export default function BoardPage() {
         "error"
       );
       loadBoard(); // resync with the server's actual state
+    } finally {
+      setPendingMoveCardIds((prev) => {
+        const next = new Set(prev);
+        next.delete(activeCardId);
+        return next;
+      });
     }
   }
 
@@ -748,6 +782,7 @@ export default function BoardPage() {
                 canAdd={myPermissions.canAdd}
                 canEdit={myPermissions.canEdit}
                 canDelete={myPermissions.canDelete}
+                pendingMoveCardIds={pendingMoveCardIds}
               />
             ))}
 

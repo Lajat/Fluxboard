@@ -9,6 +9,7 @@ import { PasswordInput } from "@/components/ui/PasswordInput";
 import { LayoutIcon, SpinnerIcon, CheckIcon } from "@/components/ui/icons";
 import { APP_NAME } from "@/lib/constants";
 
+/** The second half of the forgot-password flow — the [token] here is the one emailed from /forgot-password, and setting a new password consumes it. */
 export default function ResetPasswordPage() {
   const params = useParams<{ token: string }>();
   const router = useRouter();

@@ -8,6 +8,24 @@ import { getMemberPermissions, isWorkspaceMember, loadWorkspaceForList } from ".
 import { generateKeyPrefix } from "../lib/taskId";
 
 /**
+ * Rejects a dueDate before today. Stored dates are still plain UTC ISO
+ * timestamps (see the model) — this compares by calendar date only, not
+ * exact time, so "today" is valid regardless of what hour it currently is
+ * anywhere. Enforced server-side because the frontend's <input min="..">
+ * only stops the native date picker UI; a direct API call bypasses it
+ * entirely without this. Returns an error string, or null if valid.
+ */
+function validateDueDate(dueDate: unknown): string | null {
+  if (!dueDate) return null; // clearing/omitting a due date is always fine
+  const parsed = new Date(dueDate as string);
+  if (isNaN(parsed.getTime())) return "dueDate must be a valid date";
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  if (parsed < todayStart) return "dueDate cannot be in the past";
+  return null;
+}
+
+/**
  * Converts a Mongoose CardDocument into the plain `Card` shape defined in
  * @fluxboard/shared-types — the shape actually sent over the wire to the
  * frontend. Keeping this conversion in one function means there's a single
@@ -45,6 +63,11 @@ export async function createCard(req: Request, res: Response) {
 
   if (!title) {
     return res.status(400).json({ error: "title is required" });
+  }
+
+  const dueDateError = validateDueDate(dueDate);
+  if (dueDateError) {
+    return res.status(400).json({ error: dueDateError });
   }
 
   const list = await ListModel.findById(listId);
@@ -140,6 +163,11 @@ export async function listCardsForList(req: Request, res: Response) {
 export async function updateCard(req: Request, res: Response) {
   const { cardId } = req.params;
   const { title, description, dueDate, labels, priority, assigneeId } = req.body;
+
+  const dueDateError = validateDueDate(dueDate);
+  if (dueDateError) {
+    return res.status(400).json({ error: dueDateError });
+  }
 
   const existingCard = await CardModel.findById(cardId);
   if (!existingCard) {
@@ -277,18 +305,39 @@ export async function moveCard(req: Request, res: Response) {
     return res.status(400).json({ error: "a card can only move between lists on the same board" });
   }
 
-  // Remove the card from its old list's cardOrder — a no-op $pull if the
-  // card is moving within the same list it's already in.
-  await ListModel.findByIdAndUpdate(fromListId, { $pull: { cardOrder: card._id } });
-
-  destinationList.cardOrder.splice(newIndex, 0, card._id);
-  await destinationList.save();
+  // Remove the card from EVERY list on this board — not just fromListId,
+  // the one currently trusted to hold it — then insert at the destination
+  // atomically. This is a genuine fix for a real race condition, not
+  // just a style improvement: the old code read destinationList, spliced
+  // its array in memory, then .save()'d it — a read-modify-write with no
+  // locking. Two overlapping move requests for the same card (dragging it
+  // again before the first request's response returns — nothing
+  // previously stopped that) could both read the same stale listId and
+  // each push into a separately-fetched destination list; the second
+  // .save() could silently clobber the first's mutation, or both could
+  // succeed and leave the card genuinely recorded in TWO lists' cardOrder
+  // at once. That's a database-level corruption, which is exactly why it
+  // survived a page refresh: dnd-kit's useSortable requires globally
+  // unique ids, so a card present in two lists' arrays breaks dragging
+  // for it entirely and renders as an overlapping duplicate.
+  //
+  // Fixed by using only atomic Mongo operators, no fetch-mutate-save:
+  // - $pull across every list on the board is self-healing — even a card
+  //   already duplicated by a past race gets cleaned up on its next move.
+  // - $push with $position inserts at a specific array index atomically,
+  //   removing the second read-modify-write race entirely.
+  await ListModel.updateMany(
+    { boardId: destinationList.boardId },
+    { $pull: { cardOrder: card._id } }
+  );
+  await ListModel.findByIdAndUpdate(toListId, {
+    $push: { cardOrder: { $each: [card._id], $position: newIndex } },
+  });
 
   // Update the card's own listId to match — cardOrder arrays are the
   // source of truth for ordering, but listId is what every other query
   // (e.g. listCardsForList) filters by, so both must stay in sync.
-  card.listId = toListId;
-  await card.save();
+  const updatedCard = await CardModel.findByIdAndUpdate(cardId, { listId: toListId }, { new: true });
 
   req.app.get("io").to(`board:${destinationList.boardId}`).emit(SocketEvents.CARD_MOVED, {
     cardId: card._id.toString(),
@@ -298,5 +347,5 @@ export async function moveCard(req: Request, res: Response) {
     movedBy: req.userId,
   });
 
-  res.json(toCardResponse(card));
+  res.json(toCardResponse(updatedCard));
 }

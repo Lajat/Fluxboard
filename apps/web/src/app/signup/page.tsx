@@ -11,6 +11,7 @@ import { APP_NAME } from "@/lib/constants";
 
 type Touched = { displayName?: boolean; email?: boolean; password?: boolean; confirmPassword?: boolean };
 
+/** Signup form — email/password/name, redirects to /workspaces on success via useAuth's signup(). */
 export default function SignupPage() {
   const { signup } = useAuth();
   const [displayName, setDisplayName] = useState("");

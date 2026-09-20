@@ -14,6 +14,13 @@ import { FolderIcon, LogOutIcon, PlusIcon, TrashIcon, SpinnerIcon } from "@/comp
 import type { Workspace } from "@fluxboard/shared-types";
 import { SocketEvents, type WorkspaceMembershipPayload, type AccessRevokedPayload } from "@fluxboard/shared-types";
 
+/**
+ * The main "Your workspaces" grid — every workspace the user belongs to,
+ * with create/rename/delete, all kept in sync live via MEMBER_ADDED,
+ * ACCESS_REVOKED, and WORKSPACE_DELETED (the latter two matter here
+ * specifically because someone else can remove this user, or delete a
+ * workspace, while they're sitting on this exact page).
+ */
 export default function WorkspacesPage() {
   const { user, accessToken, isLoading: authLoading, logout } = useAuth();
   const { showToast } = useToast();
@@ -103,7 +110,14 @@ export default function WorkspacesPage() {
         accessToken,
         body: { name: newWorkspaceName },
       });
-      setWorkspaces((prev) => [...prev, created]);
+      // Guarded the same way handleMemberAdded above is — creating a
+      // workspace also triggers a MEMBER_ADDED event back to this same
+      // tab (added so the sidebar, a separate component with its own
+      // local state, learns about new workspaces too — see
+      // workspaceController.createWorkspace). Before that fix existed,
+      // this unconditional append was harmless; now it's a second path
+      // to the same state, so it needs the same "already here?" check.
+      setWorkspaces((prev) => (prev.some((ws) => ws.id === created.id) ? prev : [...prev, created]));
       setNewWorkspaceName("");
       setIsCreating(false);
       setCreateError(null);
