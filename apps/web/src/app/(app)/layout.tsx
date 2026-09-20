@@ -15,7 +15,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     <ActiveWorkspaceProvider>
       <div className="flex min-h-screen">
         <Sidebar />
-        <div className="min-w-0 flex-1">{children}</div>
+        {/* pt-14 clears the fixed mobile top bar Sidebar renders (see
+            Sidebar.tsx) — without this, every page's own content would
+            render UNDER that bar on mobile, since "fixed" positioning
+            takes it out of normal document flow entirely. Not needed on
+            desktop (sm:pt-0), where that bar doesn't exist at all. */}
+        <div className="min-w-0 flex-1 pt-14 sm:pt-0">{children}</div>
       </div>
     </ActiveWorkspaceProvider>
   );

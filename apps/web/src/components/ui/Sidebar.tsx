@@ -100,11 +100,66 @@ export function Sidebar() {
       });
     }
 
+    // Neither the sidebar nor the main /workspaces grid ever joins a
+    // workspace's own room (only its detail/board pages do), so a plain
+    // room-scoped WORKSPACE_DELETED broadcast never reached here at all
+    // — the backend now also emits this directly to every member's own
+    // personal room specifically so this handler receives it regardless
+    // of which page the member is currently on. Same cleanup as
+    // handleAccessRevoked above, since losing access and the workspace
+    // itself ceasing to exist have the same effect on this component's
+    // state either way.
+    function handleWorkspaceDeleted(workspace: Workspace) {
+      setWorkspaces((prev) => prev.filter((ws) => ws.id !== workspace.id));
+      setBoardsByWorkspace((prev) => {
+        const next = { ...prev };
+        delete next[workspace.id];
+        return next;
+      });
+    }
+
+    // Without this, a new board only ever shows up in whichever tab
+    // created it, and only after that tab's own HTTP response — the
+    // sidebar's boardsByWorkspace map is separate local state, so it
+    // never learns a board was created unless something tells it to.
+    // The workspace board-list page already joins `workspace:<id>` via
+    // "join-workspace" when you're viewing it, and since the socket
+    // connection is a shared singleton (see lib/socket.ts), the sidebar
+    // receives events for any room joined from anywhere in the app —
+    // it just never had a handler registered for this one. Only update
+    // a workspace's board list if it's already loaded (i.e. previously
+    // expanded) — for one that hasn't been fetched yet, the normal
+    // lazy-load in loadBoards() will correctly pick it up whenever the
+    // user actually expands it.
+    function handleBoardCreated(board: Board) {
+      setBoardsByWorkspace((prev) => {
+        if (!prev[board.workspaceId]) return prev;
+        if (prev[board.workspaceId].some((b) => b.id === board.id)) return prev;
+        return { ...prev, [board.workspaceId]: [...prev[board.workspaceId], board] };
+      });
+    }
+
+    function handleBoardDeleted(board: Board) {
+      setBoardsByWorkspace((prev) => {
+        if (!prev[board.workspaceId]) return prev;
+        return {
+          ...prev,
+          [board.workspaceId]: prev[board.workspaceId].filter((b) => b.id !== board.id),
+        };
+      });
+    }
+
     socket.on(SocketEvents.MEMBER_ADDED, handleMemberAdded);
     socket.on(SocketEvents.ACCESS_REVOKED, handleAccessRevoked);
+    socket.on(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
+    socket.on(SocketEvents.BOARD_CREATED, handleBoardCreated);
+    socket.on(SocketEvents.BOARD_DELETED, handleBoardDeleted);
     return () => {
       socket.off(SocketEvents.MEMBER_ADDED, handleMemberAdded);
       socket.off(SocketEvents.ACCESS_REVOKED, handleAccessRevoked);
+      socket.off(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
+      socket.off(SocketEvents.BOARD_CREATED, handleBoardCreated);
+      socket.off(SocketEvents.BOARD_DELETED, handleBoardDeleted);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
@@ -166,15 +221,32 @@ export function Sidebar() {
 
   return (
     <>
-      {/* Mobile-only trigger — hidden entirely on desktop, where the
-          sidebar is always visible (at minimum as an icon rail). */}
-      <button
-        onClick={() => setIsMobileOpen(true)}
-        aria-label="Open navigation"
-        className="fixed left-3 top-3 z-30 rounded-lg bg-white p-2 text-slate-600 shadow-md ring-1 ring-slate-200 sm:hidden"
-      >
-        <MenuIcon className="h-5 w-5" />
-      </button>
+      {/* Mobile-only top bar — hidden entirely on desktop, where the
+          sidebar is always visible (at minimum as an icon rail). This
+          replaces what was previously an isolated floating hamburger
+          button positioned independently of the page's own branding,
+          which is exactly why it could end up sitting on top of it: two
+          separately-positioned elements both anchored to the same
+          corner. A single persistent bar containing BOTH the menu toggle
+          and the logo together — the same structure Gmail/Notion/Linear
+          use for their mobile web headers — means there's only one
+          element in that region, so nothing can overlap it, on every
+          page, since this is rendered once here rather than per-page. */}
+      <div className="fixed inset-x-0 top-0 z-30 flex items-center gap-3 border-b border-slate-200 bg-white px-3 py-2.5 shadow-sm sm:hidden">
+        <button
+          onClick={() => setIsMobileOpen(true)}
+          aria-label="Open navigation"
+          className="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100"
+        >
+          <MenuIcon className="h-5 w-5" />
+        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex h-6 w-6 items-center justify-center rounded-md bg-brand-600 text-white">
+            <LayoutIcon className="h-3.5 w-3.5" />
+          </div>
+          <span className="text-sm font-semibold text-slate-800">{APP_NAME}</span>
+        </div>
+      </div>
 
       {isMobileOpen && (
         <div

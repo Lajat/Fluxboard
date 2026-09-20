@@ -58,6 +58,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
+/** Convenience hook — throws early if used outside <ToastProvider>, rather than silently doing nothing when showToast is called. */
 export function useToast(): ToastContextValue {
   const ctx = useContext(ToastContext);
   if (!ctx) {

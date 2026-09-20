@@ -32,6 +32,15 @@ RUN pnpm --filter @fluxboard/api deploy --prod /out/api
 # --- Runtime image: small, only what's needed to actually run the server ---
 FROM node:20-alpine
 
+# Baked into the image itself, not left as an Elastic Beanstalk console
+# setting — a manually-set env var is easy to forget on a new environment
+# or a config reset, and this one is load-bearing: authController's
+# `isProd` check (which decides whether auth cookies use the cross-site-
+# safe sameSite="none" or the same-site-only "lax") depends entirely on
+# NODE_ENV="production". Losing it silently reintroduces the exact
+# "refresh returns 401" bug from before, with no error pointing at why.
+ENV NODE_ENV=production
+
 WORKDIR /app
 
 COPY --from=builder /out/api ./

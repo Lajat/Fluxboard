@@ -11,6 +11,14 @@ import { avatarColorFor, initialsFor } from "@/lib/avatar";
 interface TaskCardProps {
   card: Card;
   onDelete: (cardId: string) => void;
+  /** True while a previous drag-move for this exact card is still being
+   *  persisted to the backend. Passed through to useSortable's `disabled`
+   *  option so dnd-kit refuses to start a new drag on it at the gesture
+   *  level — dragging the same card again before its move finishes is
+   *  what caused a real backend race condition (see moveCard) resulting
+   *  in the card getting recorded in two lists at once; this stops the
+   *  double-drag at the source rather than only recovering from it. */
+  isMovePending?: boolean;
   onOpen?: (card: Card) => void;
   /** Used to resolve card.assigneeId into a name/avatar — pass an empty array if unavailable, the assignee avatar is simply omitted then. */
   members?: WorkspaceMember[];
@@ -40,15 +48,16 @@ function isOverdue(iso?: string) {
  * few pixels of movement / a short hold before a drag "starts", so a
  * simple tap/click is never swallowed as a drag.
  */
-export function TaskCard({ card, onDelete, onOpen, members = [], canDelete = true }: TaskCardProps) {
+export function TaskCard({ card, onDelete, onOpen, members = [], canDelete = true, isMovePending = false }: TaskCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
+    disabled: isMovePending,
   });
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.4 : 1,
+    opacity: isDragging ? 0.4 : isMovePending ? 0.6 : 1,
   };
 
   const dueLabel = formatDueDate(card.dueDate);

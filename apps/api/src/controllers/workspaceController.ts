@@ -165,7 +165,21 @@ export async function deleteWorkspace(req: Request, res: Response) {
   await WorkspaceModel.findByIdAndDelete(workspaceId);
 
   const workspaceResponse = toWorkspaceResponse(workspace);
-  req.app.get("io").to(`workspace:${workspaceId}`).emit(SocketEvents.WORKSPACE_DELETED, workspaceResponse);
+  const io = req.app.get("io");
+
+  // Emitted to two audiences, same pattern as revokeAccess above:
+  // - the workspace room, for anyone currently viewing this workspace's
+  //   detail page or one of its boards right now
+  // - EVERY member's own personal room, since neither the main
+  //   /workspaces grid nor the sidebar ever joins a workspace's room at
+  //   all (only its own detail/board pages do) — without this, a member
+  //   who isn't currently looking at the deleted workspace specifically
+  //   would never learn it's gone, and it would sit stale in their
+  //   sidebar until a manual refresh.
+  io.to(`workspace:${workspaceId}`).emit(SocketEvents.WORKSPACE_DELETED, workspaceResponse);
+  for (const memberId of workspace.memberIds) {
+    io.to(`user:${memberId.toString()}`).emit(SocketEvents.WORKSPACE_DELETED, workspaceResponse);
+  }
 
   res.json({ deleted: workspaceResponse });
 }

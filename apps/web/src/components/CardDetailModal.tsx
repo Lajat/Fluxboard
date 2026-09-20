@@ -213,6 +213,14 @@ export function CardDetailModal({
                 value={dueDate}
                 onChange={(e) => setDueDate(e.target.value)}
                 disabled={!canEdit}
+                // Prevents newly picking a date before today — a card
+                // due "in the past" the moment it's created has no
+                // meaningful use case here and was confusing users (see
+                // GitHub issue #10). Doesn't clear or hide an already-set
+                // past date on an existing overdue card — `min` only
+                // constrains what the picker lets you newly choose, the
+                // input still displays whatever value it already has.
+                min={toDateInputValue(new Date().toISOString())}
                 className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:bg-slate-50 disabled:text-slate-500"
               />
             </div>
