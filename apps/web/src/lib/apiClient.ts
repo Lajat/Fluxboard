@@ -27,15 +27,7 @@ export class ApiError extends Error {
 
 interface ApiFetchOptions extends Omit<RequestInit, "body"> {
   body?: unknown; // pass a plain object — apiFetch handles JSON.stringify
-  /**
-   * No longer used — auth now rides on the httpOnly accessToken cookie,
-   * sent automatically via `credentials: "include"` below, rather than an
-   * explicit token the frontend has to read and attach itself. Kept in
-   * this type (rather than removed) purely so every existing call site
-   * across the app that still passes `{ accessToken, ... }` keeps
-   * compiling without needing a separate pass to strip it out everywhere;
-   * the value itself is ignored.
-   */
+  /** Legacy compatibility field; authentication is carried by httpOnly cookies. */
   accessToken?: string | null;
 }
 

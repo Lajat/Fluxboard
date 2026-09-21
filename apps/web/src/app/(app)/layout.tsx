@@ -13,7 +13,7 @@ import { Sidebar } from "@/components/ui/Sidebar";
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <ActiveWorkspaceProvider>
-      <div className="flex min-h-screen">
+      <div className="app-shell flex">
         <Sidebar />
         {/* pt-14 clears the fixed mobile top bar Sidebar renders (see
             Sidebar.tsx) — without this, every page's own content would

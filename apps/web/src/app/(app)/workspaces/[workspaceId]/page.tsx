@@ -31,13 +31,6 @@ const BOARD_GRADIENTS = [
   "from-fuchsia-500 to-purple-600",
 ];
 
-/**
- * The board grid for a single workspace — create/rename/delete boards,
- * plus the member-management panel (invites, permissions, removal).
- * Joins this workspace's socket room on mount (see the effect below) so
- * BOARD_CREATED/BOARD_DELETED and membership changes reach this page live
- * while it's open.
- */
 export default function WorkspaceBoardsPage() {
   const { accessToken, isLoading: authLoading, user } = useAuth();
   const { showToast } = useToast();

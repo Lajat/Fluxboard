@@ -155,10 +155,10 @@ export async function deleteWorkspace(req: Request, res: Response) {
   const lists = await ListModel.find({ boardId: { $in: boardIds } });
   const listIds = lists.map((l) => l._id);
 
-  // Cascade delete, innermost first — same reasoning as deleteBoard in
-  // boardController: cards → lists → boards → workspace, so a failure
-  // partway through never leaves a shallower record referencing deleted
-  // children.
+  // Delete children before parents so each successful step preserves
+  // referential consistency. These operations are not transactional, so a
+  // database failure can still leave the cascade incomplete and should be
+  // surfaced for operational recovery.
   await CardModel.deleteMany({ listId: { $in: listIds } });
   await ListModel.deleteMany({ boardId: { $in: boardIds } });
   await BoardModel.deleteMany({ workspaceId });
@@ -166,17 +166,9 @@ export async function deleteWorkspace(req: Request, res: Response) {
 
   const workspaceResponse = toWorkspaceResponse(workspace);
   const io = req.app.get("io");
-
-  // Emitted to two audiences, same pattern as revokeAccess above:
-  // - the workspace room, for anyone currently viewing this workspace's
-  //   detail page or one of its boards right now
-  // - EVERY member's own personal room, since neither the main
-  //   /workspaces grid nor the sidebar ever joins a workspace's room at
-  //   all (only its own detail/board pages do) — without this, a member
-  //   who isn't currently looking at the deleted workspace specifically
-  //   would never learn it's gone, and it would sit stale in their
-  //   sidebar until a manual refresh.
   io.to(`workspace:${workspaceId}`).emit(SocketEvents.WORKSPACE_DELETED, workspaceResponse);
+  // Most pages are not subscribed to the workspace room, but every member
+  // is always in their personal room so persistent navigation can remove it.
   for (const memberId of workspace.memberIds) {
     io.to(`user:${memberId.toString()}`).emit(SocketEvents.WORKSPACE_DELETED, workspaceResponse);
   }

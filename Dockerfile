@@ -3,8 +3,8 @@
 # packages/shared-types via a pnpm workspace link, so the build needs
 # visibility into the whole monorepo, not just the api folder alone.
 
-FROM node:20-alpine AS builder
-RUN npm install -g pnpm@9
+FROM node:22-alpine AS builder
+RUN npm install -g pnpm@11.17.0
 WORKDIR /repo
 
 # Copy just the manifests first, so Docker can cache the install step and
@@ -30,7 +30,7 @@ RUN pnpm --filter @fluxboard/api build
 RUN pnpm --filter @fluxboard/api deploy --prod /out/api
 
 # --- Runtime image: small, only what's needed to actually run the server ---
-FROM node:20-alpine
+FROM node:22-alpine
 
 # Baked into the image itself, not left as an Elastic Beanstalk console
 # setting — a manually-set env var is easy to forget on a new environment

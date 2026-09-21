@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
@@ -56,6 +56,10 @@ export function Sidebar() {
   const [loadingBoardsFor, setLoadingBoardsFor] = useState<string | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [isMobileOpen, setIsMobileOpen] = useState(false);
+  const deletedWorkspaceIds = useRef(new Set<string>());
+  // The desktop preference is shared through localStorage, but the mobile
+  // drawer always needs its full labels regardless of that preference.
+  const isEffectivelyCollapsed = isCollapsed && !isMobileOpen;
 
   // Restore the desktop collapsed/expanded preference — read once on
   // mount, guarded for SSR since localStorage doesn't exist there.
@@ -67,7 +71,15 @@ export function Sidebar() {
   useEffect(() => {
     if (!accessToken) return;
     apiFetch<{ items: Workspace[] }>("/workspaces", { accessToken })
-      .then((res) => setWorkspaces(res.items))
+      .then((res) => {
+        // Preserve a workspace announced by the socket while this request
+        // was in flight; the response may be an older snapshot.
+        setWorkspaces((prev) => {
+          const fetched = res.items.filter((workspace) => !deletedWorkspaceIds.current.has(workspace.id));
+          const fetchedIds = new Set(fetched.map((workspace) => workspace.id));
+          return [...fetched, ...prev.filter((workspace) => !fetchedIds.has(workspace.id))];
+        });
+      })
       .catch(() => {
         // Non-critical for the rest of the app to function — the sidebar
         // just stays empty rather than blocking the page with an error.
@@ -86,12 +98,14 @@ export function Sidebar() {
 
     function handleMemberAdded(payload: WorkspaceMembershipPayload & { workspace?: Workspace }) {
       if (payload.member.id !== user!.id || !payload.workspace) return;
+      deletedWorkspaceIds.current.delete(payload.workspace.id);
       setWorkspaces((prev) =>
         prev.some((ws) => ws.id === payload.workspace!.id) ? prev : [...prev, payload.workspace!]
       );
     }
 
     function handleAccessRevoked(payload: AccessRevokedPayload) {
+      deletedWorkspaceIds.current.add(payload.workspaceId);
       setWorkspaces((prev) => prev.filter((ws) => ws.id !== payload.workspaceId));
       setBoardsByWorkspace((prev) => {
         const next = { ...prev };
@@ -110,6 +124,7 @@ export function Sidebar() {
     // itself ceasing to exist have the same effect on this component's
     // state either way.
     function handleWorkspaceDeleted(workspace: Workspace) {
+      deletedWorkspaceIds.current.add(workspace.id);
       setWorkspaces((prev) => prev.filter((ws) => ws.id !== workspace.id));
       setBoardsByWorkspace((prev) => {
         const next = { ...prev };
@@ -265,7 +280,7 @@ export function Sidebar() {
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white">
               <LayoutIcon className="h-4 w-4" />
             </div>
-            {!isCollapsed && (
+            {!isEffectivelyCollapsed && (
               <span className="truncate text-sm font-semibold text-slate-800">{APP_NAME}</span>
             )}
           </Link>
@@ -314,7 +329,7 @@ export function Sidebar() {
                   <button
                     onClick={() => toggleExpand(ws.id)}
                     aria-label={isExpanded ? "Collapse" : "Expand"}
-                    className={`shrink-0 rounded p-0.5 hover:bg-black/5 ${isCollapsed ? "hidden" : ""}`}
+                    className={`shrink-0 rounded p-0.5 hover:bg-black/5 ${isEffectivelyCollapsed ? "hidden" : ""}`}
                   >
                     <ChevronDownIcon
                       className={`h-3.5 w-3.5 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
@@ -325,7 +340,7 @@ export function Sidebar() {
                     title={ws.name}
                     className="flex min-w-0 flex-1 items-center gap-2"
                   >
-                    {isCollapsed ? (
+                    {isEffectivelyCollapsed ? (
                       // Collapsed: every workspace previously rendered as an
                       // identical plain folder icon — no way to tell them
                       // apart without hovering each one for its tooltip. A
@@ -344,11 +359,11 @@ export function Sidebar() {
                     ) : (
                       <FolderIcon className="h-4 w-4 shrink-0" />
                     )}
-                    {!isCollapsed && <span className="truncate font-medium">{ws.name}</span>}
+                    {!isEffectivelyCollapsed && <span className="truncate font-medium">{ws.name}</span>}
                   </Link>
                 </div>
 
-                {isExpanded && !isCollapsed && (
+                {isExpanded && !isEffectivelyCollapsed && (
                   <div className="ml-6 mt-0.5 space-y-0.5 border-l border-slate-100 pl-2">
                     {loadingBoardsFor === ws.id ? (
                       <div className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-slate-400">
@@ -384,7 +399,7 @@ export function Sidebar() {
             );
           })}
 
-          {!isCollapsed && (
+          {!isEffectivelyCollapsed && (
             <Link
               href="/workspaces"
               className="mt-2 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-slate-400 hover:bg-slate-50 hover:text-brand-600"
@@ -400,7 +415,7 @@ export function Sidebar() {
             className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-slate-500 hover:bg-slate-50 hover:text-slate-800"
           >
             <LogOutIcon className="h-4 w-4 shrink-0" />
-            {!isCollapsed && <span className="truncate">Log out</span>}
+            {!isEffectivelyCollapsed && <span className="truncate">Log out</span>}
           </button>
         </div>
       </aside>

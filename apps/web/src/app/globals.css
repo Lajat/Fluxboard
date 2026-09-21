@@ -32,11 +32,60 @@ body {
   background: transparent;
 }
 
-/* Snap each board column into place while swipe-scrolling horizontally on
-   touch devices — makes the board feel intentional rather than a loose
-   overflow-x on a phone. */
+/* No visible scrollbar at all (the content still scrolls). Used on the board's
+   horizontal scroller: the board already has its own cues — edge fades,
+   arrow buttons on desktop, a swipe hint on touch — so a native bar just
+   adds clutter. */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+
+/* Full-height app shell. `dvh` tracks the *visible* viewport on mobile
+   browsers (whose `vh` includes the area hidden behind the collapsing URL
+   bar, which is what made the page scroll by a few dozen pixels). The plain
+   `vh` line above each `dvh` line is the fallback for older browsers. */
+.app-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* The board page fills exactly the space below the fixed mobile top bar
+   (3.5rem, matches the pt-14 on the layout's content wrapper) — or the whole
+   viewport on desktop — so the lists area gets a DEFINITE height. Without one,
+   `h-full` on the scroller silently computed to `auto`, the scroller shrank to
+   the height of its cards, and its scrollbar ended up right under them in the
+   middle of the screen. */
+.board-viewport {
+  height: calc(100vh - 3.5rem);
+  height: calc(100dvh - 3.5rem);
+}
+@media (min-width: 640px) {
+  .board-viewport {
+    height: 100vh;
+    height: 100dvh;
+  }
+}
+
+/* Horizontal board scrolling. overscroll-behavior stops a sideways swipe at
+   the edge of the board from being treated as browser back/forward. */
 .board-scroll {
-  scroll-snap-type: x proximity;
+  overscroll-behavior-x: contain;
+}
+/* Snap each column into place while swipe-scrolling — touch devices only
+   (with a mouse wheel/trackpad, snapping just fights you). Snapping is switched
+   off while a card is being dragged: dnd-kit auto-scrolls the board by nudging
+   scrollLeft every frame, and snap points would keep yanking it back. */
+@media (pointer: coarse) {
+  .board-scroll {
+    scroll-snap-type: x proximity;
+  }
+}
+.board-scroll[data-dragging="true"] {
+  scroll-snap-type: none;
 }
 .board-column-snap {
   scroll-snap-align: start;

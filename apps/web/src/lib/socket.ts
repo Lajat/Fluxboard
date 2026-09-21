@@ -3,11 +3,6 @@ import { io, Socket } from "socket.io-client";
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:4000";
 
 let socket: Socket | null = null;
-// Remembered so we can re-identify automatically after a reconnect (laptop
-// sleep, brief network drop) — the server treats each new connection as
-// anonymous until it re-identifies, so without this a dropped/restored
-// connection would silently stop receiving personal notifications.
-let lastAccessToken: string | null = null;
 
 /**
  * Returns a single shared Socket.io connection for the whole app.
@@ -18,14 +13,9 @@ let lastAccessToken: string | null = null;
  * duplicate event handlers to pile up. Call this once per page (e.g. in a
  * useEffect on mount) and reuse the same socket across the session.
  *
- * Authentication happens automatically: `withCredentials: true` makes the
- * browser attach the httpOnly accessToken cookie to the socket.io
- * handshake (the initial HTTP request before it upgrades to a WebSocket),
- * and the server reads it there (see apps/api/src/index.ts). There's
- * deliberately no separate "identify" step the way there was when the
- * token lived in localStorage and had to be read and sent manually —
- * connecting now IS authenticating, including automatically on every
- * reconnect after a dropped connection.
+ * Authentication happens through the httpOnly accessToken cookie attached to
+ * the Socket.IO handshake. Reconnects repeat that handshake, so no separate
+ * client-side token or identify event is needed.
  */
 export function getSocket(): Socket {
   if (!socket) {
@@ -39,9 +29,6 @@ export function getSocket(): Socket {
       reconnection: true,
     });
 
-    socket.on("connect", () => {
-      if (lastAccessToken) socket!.emit("identify", lastAccessToken);
-    });
   }
   return socket;
 }
