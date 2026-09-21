@@ -14,7 +14,8 @@ async function run() {
 
   let cookieHeader = "";
 
-  // Helper to accumulate cookies from fetch responses
+  // Keep the latest auth cookies together so subsequent requests can reuse
+  // the session established by signup, login, and refresh.
   function extractCookies(res: Response) {
     const rawCookie = res.headers.get("set-cookie");
     if (rawCookie) {
@@ -89,7 +90,7 @@ async function run() {
   extractCookies(res);
   const refreshBody = await res.json();
   assert.strictEqual(refreshBody.success, true, "refresh should return success true");
-  console.log("✓ POST /auth/refresh rotates tokens successfully");
+  console.log("✓ POST /auth/refresh refreshes the session successfully");
 
   console.log("\nAll auth tests passed.");
 }

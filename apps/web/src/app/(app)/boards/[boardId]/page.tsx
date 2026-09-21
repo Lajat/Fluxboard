@@ -22,7 +22,7 @@ import { useToast } from "@/components/ui/Toast";
 import { apiFetch, ApiError } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
 import { BoardColumn } from "@/components/BoardColumn";
-import { TaskCard } from "@/components/TaskCard";
+import { TaskCardView } from "@/components/TaskCard";
 import { CardDetailModal, type CardUpdates } from "@/components/CardDetailModal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EditableTitle } from "@/components/ui/EditableTitle";
@@ -48,23 +48,21 @@ interface ListWithCards extends Omit<List, "cardOrder"> {
 }
 
 /**
- * The Kanban board itself — lists and cards, drag-and-drop (via dnd-kit),
- * and the live multi-user sync for all of it. A few things worth knowing
- * before editing this file:
+ * Lists and cards, drag-and-drop (via dnd-kit), and the live multi-user
+ * sync for both.
  *
- * - Drag-and-drop uses optimistic local updates (see handleDragEnd) for
- *   an instant-feeling UI, backed by an atomic, self-healing move on the
- *   server (see moveCard in cardController) — a card is never trusted to
- *   be "in exactly one list" purely because the frontend thinks so.
- * - pendingMoveCardIds disables re-dragging a card while its previous
- *   move is still being persisted — this exists because of a real,
- *   previously-shipped bug (see BLOG_POST_DRAFT.md) where dragging the
- *   same card twice in quick succession could get it recorded in two
- *   lists at once.
- * - Every socket event handler here is written to be idempotent (safe to
- *   apply twice) on purpose — this tab's own actions can arrive back via
- *   both the HTTP response AND the socket broadcast for that same event,
- *   and both need to agree on the outcome without duplicating anything.
+ * Drag-and-drop uses optimistic local updates (handleDragEnd) backed by
+ * an atomic, self-healing move on the server (moveCard in
+ * cardController) — a card is never trusted to be "in exactly one list"
+ * purely because the frontend thinks so.
+ *
+ * pendingMoveCardIds disables re-dragging a card while its previous move
+ * is still being persisted, keeping rapid consecutive moves ordered.
+ *
+ * Every socket handler here is idempotent by design: this tab's own
+ * actions can arrive back via both the HTTP response and the socket
+ * broadcast for that same event, and both must agree on the outcome
+ * without duplicating anything.
  */
 export default function BoardPage() {
   const { accessToken, isLoading: authLoading, user } = useAuth();
@@ -168,7 +166,15 @@ export default function BoardPage() {
   useEffect(() => {
     updateScrollState();
     window.addEventListener("resize", updateScrollState);
-    return () => window.removeEventListener("resize", updateScrollState);
+    // A window "resize" isn't the only way the scroller's width changes —
+    // collapsing/expanding the sidebar resizes it too, with no window event.
+    const el = scrollRef.current;
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(updateScrollState) : null;
+    if (el && observer) observer.observe(el);
+    return () => {
+      window.removeEventListener("resize", updateScrollState);
+      observer?.disconnect();
+    };
   }, [updateScrollState, lists.length]);
 
   function scrollByColumn(direction: 1 | -1) {
@@ -179,17 +185,18 @@ export default function BoardPage() {
   //  - MouseSensor: a drag only "activates" after the pointer has moved a
   //    few pixels, so a plain click (e.g. opening the card modal) is never
   //    mistaken for a drag.
-  //  - TouchSensor: on a touchscreen there's no separate click vs.
-  //    drag-start distinction the way there is with a mouse, so instead we
-  //    require a short press-and-hold (delay) before a drag begins. This
-  //    is the actual fix for "can't drag on mobile" — without a dedicated
-  //    TouchSensor, dnd-kit's PointerSensor alone frequently loses the
-  //    gesture to the browser's native touch-scrolling.
+  //  - TouchSensor: on a touchscreen a finger landing on a card could be
+  //    the start of a scroll OR of a drag, so we require a short
+  //    press-and-hold (delay) before a drag begins. Moving before the delay
+  //    elapses cancels the activation and the browser scrolls normally;
+  //    holding still for the delay and then moving lifts the card (and
+  //    dnd-kit blocks scrolling from that point on). This pairs with
+  //    `touch-manipulation` on the card — see TaskCardView.
   //  - KeyboardSensor: lets a card be picked up and moved with arrow keys
   //    once focused, for keyboard/accessibility support.
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 5 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
@@ -624,6 +631,12 @@ export default function BoardPage() {
     setActiveCard(cardsById[event.active.id as string] ?? null);
   }
 
+  // Escape key, or the OS cancelling the touch (incoming call, gesture
+  // conflict). Without this the drag ends without onDragEnd ever firing.
+  function handleDragCancel() {
+    setActiveCard(null);
+  }
+
   /**
    * Core drag-and-drop logic. `over.id` is either another card's id
    * (dropped near/on a card) or a "column-<listId>" id (dropped into an
@@ -652,16 +665,23 @@ export default function BoardPage() {
       const destList = lists.find((l) => l.id === destListId);
       destIndex = destList ? destList.cardOrder.length : 0;
     } else {
-      // Dropped on/near another card — that card's list is the
-      // destination, at that card's current index.
+      // Dropped on/near another card — that card's list is the destination.
       const destList = lists.find((l) => l.cardOrder.includes(overId));
       if (!destList) return;
       destListId = destList.id;
       destIndex = destList.cardOrder.indexOf(overId);
+      const activeRect = active.rect.current.translated;
+      const overMidpoint = over.rect.top + over.rect.height / 2;
+      if (activeRect && activeRect.top + activeRect.height / 2 > overMidpoint) {
+        destIndex += 1;
+      }
     }
 
-    if (sourceList.id === destListId && sourceList.cardOrder.indexOf(activeCardId) === destIndex) {
-      return; // dropped back where it started — nothing to do
+    const sourceIndex = sourceList.cardOrder.indexOf(activeCardId);
+    if (sourceList.id === destListId) {
+      const finalIndex = sourceIndex < destIndex ? destIndex - 1 : destIndex;
+      if (sourceIndex === finalIndex) return; // dropped back where it started
+      destIndex = finalIndex;
     }
 
     // Optimistic local update — the UI reflects the move immediately,
@@ -708,8 +728,14 @@ export default function BoardPage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-slate-50">
-      <header className="sticky top-0 z-10 border-b border-slate-200 bg-white/90 px-4 py-3 backdrop-blur sm:px-6">
+    // .board-viewport gives this page a definite, viewport-sized height (see
+    // globals.css) so the lists area below can fill it exactly and nothing
+    // scrolls except the lists themselves.
+    <main className="board-viewport flex flex-col overflow-hidden bg-slate-50">
+      {/* A solid, non-sticky bar: the page itself no longer scrolls, so there's
+          nothing to stick to — and no translucent/blurred header for cards to
+          slide underneath. */}
+      <header className="shrink-0 border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
         <Link
           href={board ? `/workspaces/${board.workspaceId}` : "/workspaces"}
           className="mb-2 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-brand-600"
@@ -758,14 +784,20 @@ export default function BoardPage() {
         collisionDetection={closestCorners}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
+        onDragCancel={handleDragCancel}
       >
         {/* Relative wrapper so the fade gradients and arrow buttons can sit
             on top of the scrollable row at fixed screen edges. */}
-        <div className="relative flex-1 overflow-hidden">
+        <div className="relative min-h-0 flex-1 overflow-hidden">
+          {/* absolute inset-0 (instead of h-full): the scroller is pinned to
+              the wrapper's box, so its height is definite no matter how the
+              flex layout above it resolves. Columns use max-h-full and scroll
+              internally; the scroller itself only ever scrolls sideways. */}
           <div
             ref={scrollRef}
             onScroll={updateScrollState}
-            className="board-scroll scrollbar-thin flex h-full items-start gap-3 overflow-x-auto p-4 sm:gap-4 sm:p-6"
+            data-dragging={activeCard ? "true" : "false"}
+            className="board-scroll scrollbar-thin absolute inset-0 flex items-start gap-3 overflow-x-auto overflow-y-hidden p-4 sm:gap-4 sm:p-6"
           >
             {lists.map((list) => (
               <BoardColumn
@@ -852,10 +884,20 @@ export default function BoardPage() {
           {canScrollLeft && (
             <>
               <div className="pointer-events-none absolute inset-y-0 left-0 z-[1] w-6 bg-gradient-to-r from-black/5 to-transparent sm:w-10" />
+              {/* Anchored to the bottom edge, not vertically centered on
+                  the whole scroll container — the container spans nearly
+                  the full viewport height, so centering relative to IT
+                  (rather than to the actual column content, which is
+                  usually much shorter) left these floating in empty
+                  space below the cards on most boards. A fixed bottom
+                  offset stays predictable regardless of column height,
+                  and never risks sitting on top of a card the way a
+                  height-dependent center position could on a very tall
+                  column. */}
               <button
                 onClick={() => scrollByColumn(-1)}
                 aria-label="Scroll lists left"
-                className="absolute left-2 top-1/2 z-[1] hidden -translate-y-1/2 rounded-full bg-white p-1.5 text-slate-500 shadow-md ring-1 ring-slate-200 transition hover:text-brand-600 sm:flex"
+                className="absolute bottom-4 left-2 z-[1] hidden rounded-full bg-white p-1.5 text-slate-500 shadow-md ring-1 ring-slate-200 transition hover:text-brand-600 sm:flex"
               >
                 <ChevronLeftIcon className="h-4 w-4" />
               </button>
@@ -868,7 +910,7 @@ export default function BoardPage() {
               <button
                 onClick={() => scrollByColumn(1)}
                 aria-label="Scroll lists right"
-                className="absolute right-2 top-1/2 z-[1] hidden -translate-y-1/2 rounded-full bg-white p-1.5 text-slate-500 shadow-md ring-1 ring-slate-200 transition hover:text-brand-600 sm:flex"
+                className="absolute bottom-4 right-2 z-[1] hidden rounded-full bg-white p-1.5 text-slate-500 shadow-md ring-1 ring-slate-200 transition hover:text-brand-600 sm:flex"
               >
                 <ChevronRightIcon className="h-4 w-4" />
               </button>
@@ -890,7 +932,9 @@ export default function BoardPage() {
             cursor — without this, dnd-kit only moves the original element,
             which can look janky mid-drag across columns. */}
         <DragOverlay>
-          {activeCard ? <TaskCard card={activeCard} onDelete={() => {}} /> : null}
+          {/* Presentational copy only — never the sortable <TaskCard>, which
+              would register a second draggable under the same id. */}
+          {activeCard ? <TaskCardView card={activeCard} members={members} canDelete={false} isOverlay /> : null}
         </DragOverlay>
       </DndContext>
 

@@ -97,7 +97,10 @@ export function BoardColumn({
 
       <div
         ref={setNodeRef}
-        className="scrollbar-thin min-h-[20px] flex-1 space-y-2 overflow-y-auto px-0.5"
+        // min-h: this element is the drop target for an EMPTY column (there's no
+        // card to drop "next to"). 20px was a sliver you had to hit exactly —
+        // fine for a mouse, close to impossible with a thumb.
+        className="scrollbar-thin min-h-[56px] flex-1 space-y-2 overflow-y-auto px-0.5"
       >
         <SortableContext items={cards.map((c) => c.id)} strategy={verticalListSortingStrategy}>
           {cards.map((card) => (

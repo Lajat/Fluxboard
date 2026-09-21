@@ -47,7 +47,7 @@ export function Modal({ open, onClose, title, children, widthClassName = "max-w-
         role="dialog"
         aria-modal="true"
         onClick={(e) => e.stopPropagation()}
-        className={`max-h-[90vh] w-full ${widthClassName} overflow-y-auto rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 animate-[modal-in_0.15s_ease-out]`}
+        className={`scrollbar-thin max-h-[90vh] w-full ${widthClassName} overflow-y-auto rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 animate-[modal-in_0.15s_ease-out]`}
       >
         {title && (
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">

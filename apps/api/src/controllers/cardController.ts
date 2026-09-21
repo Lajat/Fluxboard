@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { Types } from "mongoose";
 import { CardModel } from "../models/Card";
 import { ListModel } from "../models/List";
 import { BoardModel } from "../models/Board";
@@ -50,12 +51,8 @@ function toCardResponse(doc: any): Card {
 
 /**
  * POST /lists/:listId/cards
- * Creates a new card at the end of the given list's cardOrder. Requires
- * "add" permission in the board's workspace — previously this endpoint
- * had NO membership check at all, meaning any logged-in user could create
- * cards on any board on the server just by knowing/guessing a listId.
- * That gap is closed here, not just extended with the new granular
- * permission levels.
+ * Creates a new card at the end of the given list's cardOrder. The caller
+ * must be a workspace member with the "add" permission.
  */
 export async function createCard(req: Request, res: Response) {
   const { listId } = req.params;
@@ -270,7 +267,7 @@ export async function moveCard(req: Request, res: Response) {
   const { cardId } = req.params;
   const { toListId, newIndex } = req.body;
 
-  if (!toListId || typeof newIndex !== "number") {
+  if (!toListId || !Number.isInteger(newIndex) || newIndex < 0) {
     return res.status(400).json({ error: "toListId and newIndex are required" });
   }
 
@@ -305,34 +302,45 @@ export async function moveCard(req: Request, res: Response) {
     return res.status(400).json({ error: "a card can only move between lists on the same board" });
   }
 
-  // Remove the card from EVERY list on this board — not just fromListId,
-  // the one currently trusted to hold it — then insert at the destination
-  // atomically. This is a genuine fix for a real race condition, not
-  // just a style improvement: the old code read destinationList, spliced
-  // its array in memory, then .save()'d it — a read-modify-write with no
-  // locking. Two overlapping move requests for the same card (dragging it
-  // again before the first request's response returns — nothing
-  // previously stopped that) could both read the same stale listId and
-  // each push into a separately-fetched destination list; the second
-  // .save() could silently clobber the first's mutation, or both could
-  // succeed and leave the card genuinely recorded in TWO lists' cardOrder
-  // at once. That's a database-level corruption, which is exactly why it
-  // survived a page refresh: dnd-kit's useSortable requires globally
-  // unique ids, so a card present in two lists' arrays breaks dragging
-  // for it entirely and renders as an overlapping duplicate.
-  //
-  // Fixed by using only atomic Mongo operators, no fetch-mutate-save:
-  // - $pull across every list on the board is self-healing — even a card
-  //   already duplicated by a past race gets cleaned up on its next move.
-  // - $push with $position inserts at a specific array index atomically,
-  //   removing the second read-modify-write race entirely.
+  // Remove every existing occurrence, then insert one copy in the destination
+  // within the same update pipeline so overlapping moves cannot duplicate it.
+  const cardObjectId = new Types.ObjectId(cardId);
+  const destinationObjectId = new Types.ObjectId(toListId);
   await ListModel.updateMany(
     { boardId: destinationList.boardId },
-    { $pull: { cardOrder: card._id } }
+    [
+      {
+        $set: {
+          cardOrder: {
+            $let: {
+              vars: {
+                remaining: {
+                  $filter: {
+                    input: "$cardOrder",
+                    as: "cardId",
+                    cond: { $ne: ["$$cardId", cardObjectId] },
+                  },
+                },
+              },
+              in: {
+                $cond: [
+                  { $eq: ["$_id", destinationObjectId] },
+                  {
+                    $concatArrays: [
+                      newIndex === 0 ? [] : { $slice: ["$$remaining", 0, newIndex] },
+                      [cardObjectId],
+                      { $slice: ["$$remaining", newIndex] },
+                    ],
+                  },
+                  "$$remaining",
+                ],
+              },
+            },
+          },
+        },
+      },
+    ]
   );
-  await ListModel.findByIdAndUpdate(toListId, {
-    $push: { cardOrder: { $each: [card._id], $position: newIndex } },
-  });
 
   // Update the card's own listId to match — cardOrder arrays are the
   // source of truth for ordering, but listId is what every other query

@@ -64,10 +64,8 @@ function issueTokens(userId: string) {
  *    token was never exposed there in the first place. Scoping it this
  *    narrowly is the main extra protection a refresh token gets beyond
  *    just being httpOnly.
- *  - sameSite "strict" on the refresh token (vs "lax" on the access
- *    token) for the same reason: it's the more sensitive of the two, and
- *    "strict" means it's never sent on a cross-site navigation at all,
- *    only requests that originate from this app itself.
+ * Both cookies use the same environment-specific SameSite policy because
+ * the frontend and API are separate origins in development and production.
  */
 function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
   // sameSite must be "none" in production: the frontend (vercel.app) and
@@ -166,9 +164,9 @@ export async function login(req: Request, res: Response) {
 
 /**
  * POST /auth/refresh
- * Exchanges the refreshToken cookie for a new pair of tokens (rotated —
- * every use of a refresh token invalidates it in favor of a new one,
- * limiting the damage if one is ever stolen), written back as cookies.
+ * Exchanges the refreshToken cookie for a new pair of tokens, written back
+ * as cookies. Refresh tokens are stateless JWTs here, so issuing a new pair
+ * does not revoke the token that was used.
  * The frontend calls this with no body at all — the refresh token itself
  * is never something frontend code reads or sends explicitly, since it's
  * httpOnly and scoped to only be sent to this one path automatically.
@@ -225,18 +223,9 @@ const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 /**
  * POST /auth/forgot-password
- * Generates a one-time, expiring password-reset token.
- *
- * NOTE on this being a portfolio project rather than a production app:
- * a real implementation would email the reset link and always return the
- * exact same generic response regardless of whether the account exists,
- * to avoid leaking "is this email registered?" to an attacker. This
- * project has no email-sending infrastructure connected, so instead the
- * link is returned directly in the response when the account exists — the
- * frontend displays it on-screen with a note that production would send
- * it by email instead. Not sending it back for a nonexistent email at
- * least avoids the most direct enumeration vector, even without a mail
- * service to fully close the gap.
+ * Generates a one-time, expiring password-reset token. The current app
+ * returns the token to the caller because it does not yet have an email
+ * delivery service; the token is still stored with a one-hour expiry.
  */
 export async function forgotPassword(req: Request, res: Response) {
   const { email } = req.body;

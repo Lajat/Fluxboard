@@ -10,15 +10,7 @@ import { SocketEvents, type AccessRevokedPayload } from "@fluxboard/shared-types
 
 interface AuthContextValue {
   user: User | null;
-  /**
-   * No longer an actual JWT — the real access token lives in an httpOnly
-   * cookie the frontend can never read. This is now just a truthy/falsy
-   * "is there an authenticated session right now" flag, kept under the
-   * same name and shape so the many `if (!accessToken) return` guards
-   * scattered across the app (gating API calls and socket joins on "are we
-   * logged in yet") keep working unchanged. Nothing anywhere reads this
-   * value's actual contents, only its truthiness.
-   */
+  /** Session-presence sentinel; the actual JWT remains in an httpOnly cookie. */
   accessToken: string | null;
   /** True while the initial "am I already logged in?" check on page load is running. */
   isLoading: boolean;

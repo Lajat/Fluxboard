@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
@@ -14,13 +14,6 @@ import { FolderIcon, LogOutIcon, PlusIcon, TrashIcon, SpinnerIcon } from "@/comp
 import type { Workspace } from "@fluxboard/shared-types";
 import { SocketEvents, type WorkspaceMembershipPayload, type AccessRevokedPayload } from "@fluxboard/shared-types";
 
-/**
- * The main "Your workspaces" grid — every workspace the user belongs to,
- * with create/rename/delete, all kept in sync live via MEMBER_ADDED,
- * ACCESS_REVOKED, and WORKSPACE_DELETED (the latter two matter here
- * specifically because someone else can remove this user, or delete a
- * workspace, while they're sitting on this exact page).
- */
 export default function WorkspacesPage() {
   const { user, accessToken, isLoading: authLoading, logout } = useAuth();
   const { showToast } = useToast();
@@ -40,6 +33,15 @@ export default function WorkspacesPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [deletingWorkspace, setDeletingWorkspace] = useState<Workspace | null>(null);
+  const deletedWorkspaceIds = useRef(new Set<string>());
+
+  // A create reaches this tab through both the socket event and the HTTP
+  // response. Upserting by id makes either arrival order safe and prevents
+  // duplicate workspace cards.
+  const upsertWorkspace = useCallback((workspace: Workspace) => {
+    deletedWorkspaceIds.current.delete(workspace.id);
+    setWorkspaces((prev) => (prev.some((ws) => ws.id === workspace.id) ? prev : [...prev, workspace]));
+  }, []);
 
   // Redirect to login if not authenticated — this page requires a user.
   useEffect(() => {
@@ -52,7 +54,15 @@ export default function WorkspacesPage() {
     if (!accessToken) return;
 
     apiFetch<{ items: Workspace[] }>("/workspaces", { accessToken })
-      .then((res) => setWorkspaces(res.items))
+      .then((res) => {
+        // Keep any membership event that arrived while this request was in
+        // flight; the response is only a snapshot from before that event.
+        setWorkspaces((prev) => {
+          const fetched = res.items.filter((workspace) => !deletedWorkspaceIds.current.has(workspace.id));
+          const fetchedIds = new Set(fetched.map((workspace) => workspace.id));
+          return [...fetched, ...prev.filter((workspace) => !fetchedIds.has(workspace.id))];
+        });
+      })
       .catch((err) =>
         showToast(err instanceof ApiError ? err.message : "Failed to load workspaces", "error")
       )
@@ -72,10 +82,14 @@ export default function WorkspacesPage() {
 
     function handleMemberAdded(payload: WorkspaceMembershipPayload & { workspace?: Workspace }) {
       if (payload.member.id !== user!.id || !payload.workspace) return;
-      setWorkspaces((prev) =>
-        prev.some((ws) => ws.id === payload.workspace!.id) ? prev : [...prev, payload.workspace!]
-      );
-      showToast(`You were added to "${payload.workspace.name}"`);
+      upsertWorkspace(payload.workspace);
+      // Creating a workspace also emits MEMBER_ADDED to its creator (that's
+      // how the sidebar learns about it). "You were added to <your own new
+      // workspace>" would be a nonsense toast, so only announce workspaces
+      // somebody ELSE owns.
+      if (payload.workspace.ownerId !== user!.id) {
+        showToast(`You were added to "${payload.workspace.name}"`);
+      }
     }
 
     // The counterpart to the above: if someone is removed from a
@@ -85,6 +99,7 @@ export default function WorkspacesPage() {
     // now-inaccessible workspace would otherwise just sit in the grid,
     // stale, until a manual refresh. This removes it from view directly.
     function handleAccessRevoked(payload: AccessRevokedPayload) {
+      deletedWorkspaceIds.current.add(payload.workspaceId);
       setWorkspaces((prev) => prev.filter((ws) => ws.id !== payload.workspaceId));
     }
 
@@ -110,14 +125,7 @@ export default function WorkspacesPage() {
         accessToken,
         body: { name: newWorkspaceName },
       });
-      // Guarded the same way handleMemberAdded above is — creating a
-      // workspace also triggers a MEMBER_ADDED event back to this same
-      // tab (added so the sidebar, a separate component with its own
-      // local state, learns about new workspaces too — see
-      // workspaceController.createWorkspace). Before that fix existed,
-      // this unconditional append was harmless; now it's a second path
-      // to the same state, so it needs the same "already here?" check.
-      setWorkspaces((prev) => (prev.some((ws) => ws.id === created.id) ? prev : [...prev, created]));
+      upsertWorkspace(created);
       setNewWorkspaceName("");
       setIsCreating(false);
       setCreateError(null);
@@ -143,6 +151,7 @@ export default function WorkspacesPage() {
     if (!deletingWorkspace) return;
     try {
       await apiFetch(`/workspaces/${deletingWorkspace.id}`, { method: "DELETE", accessToken });
+      deletedWorkspaceIds.current.add(deletingWorkspace.id);
       setWorkspaces((prev) => prev.filter((ws) => ws.id !== deletingWorkspace.id));
       showToast("Workspace deleted");
     } catch (err) {

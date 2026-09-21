@@ -30,13 +30,6 @@ export interface Workspace {
   createdAt: string;
 }
 
-/**
- * A workspace member with enough profile info to render an avatar/name —
- * returned by GET /workspaces/:id/members, which populates the bare
- * `memberIds` on Workspace into this richer shape. Kept as a separate type
- * (rather than putting this on Workspace itself) because most places that
- * fetch a Workspace don't need every member's profile, just the id list.
- */
 /** What a member is allowed to do within a workspace — see the owner-always-full-access and default-full-access-until-restricted rules in the API's lib/permissions.ts. */
 export interface MemberPermissions {
   canAdd: boolean;
@@ -44,6 +37,11 @@ export interface MemberPermissions {
   canDelete: boolean;
 }
 
+/**
+ * A workspace member with enough profile info to render an avatar/name —
+ * returned by GET /workspaces/:id/members, which enriches Workspace.memberIds
+ * with the member profiles needed by the members UI.
+ */
 export interface WorkspaceMember {
   id: string;
   email: string;
@@ -146,10 +144,8 @@ export const SocketEvents = {
   MEMBER_ADDED: "workspace:member-added",
   MEMBER_REMOVED: "workspace:member-removed",
   MEMBER_PERMISSIONS_UPDATED: "workspace:member-permissions-updated",
-  // Sent to a specific removed user's personal room ONLY (not the whole
-  // workspace room the way MEMBER_REMOVED is) — the one signal a client
-  // needs to immediately back out of a workspace/board it's currently
-  // looking at, rather than finding out the hard way on its next request.
+  // Sent to the removed user's personal room so active clients can leave
+  // the workspace immediately instead of waiting for a failed API request.
   ACCESS_REVOKED: "workspace:access-revoked",
   COMMENT_ADDED: "comment:added",
 } as const;
@@ -163,10 +159,16 @@ export interface CardMovedPayload {
   movedBy: string; // User.id of who made the change
 }
 
-/** Payload for `workspace:member-added` / `workspace:member-removed`. */
+/** Payload for `workspace:member-added`, including the member's profile. */
 export interface WorkspaceMembershipPayload {
   workspaceId: string;
   member: WorkspaceMember;
+}
+
+/** Payload for `workspace:member-removed`. */
+export interface WorkspaceMemberRemovedPayload {
+  workspaceId: string;
+  userId: string;
 }
 
 /** Payload for `workspace:member-permissions-updated`. */
@@ -175,7 +177,7 @@ export interface MemberPermissionsUpdatedPayload {
   member: WorkspaceMember;
 }
 
-/** Payload for `workspace:access-revoked`, sent only to the affected user. */
+/** Payload for `workspace:access-revoked`, sent to the affected user. */
 export interface AccessRevokedPayload {
   workspaceId: string;
   workspaceName: string;

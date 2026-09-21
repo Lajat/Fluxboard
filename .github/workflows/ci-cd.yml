@@ -108,5 +108,4 @@ jobs:
           environment_name: fluxboard-api-env
           region: ${{ secrets.AWS_REGION }}
           version_label: ${{ env.VERSION_LABEL }}
-          # version_label: "fluxboard-${{ github.ref_name }}"
           deployment_package: deploy.zip
