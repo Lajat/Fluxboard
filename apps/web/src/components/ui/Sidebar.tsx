@@ -13,9 +13,8 @@ import {
   LayoutIcon,
   FolderIcon,
   ChevronDownIcon,
-  ChevronRightIcon,
-  ChevronLeftIcon,
   MenuIcon,
+  SidebarIcon,
   XIcon,
   LogOutIcon,
   PlusIcon,
@@ -275,15 +274,32 @@ export function Sidebar() {
           isMobileOpen ? "translate-x-0" : "-translate-x-full"
         } ${isCollapsed ? "sm:w-16" : "sm:w-64"}`}
       >
-        <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-3">
+        <div
+          className={`flex items-center justify-between border-b border-slate-100 py-3 ${
+            isEffectivelyCollapsed ? "gap-0 px-1.5" : "gap-2 px-3"
+          }`}
+        >
           <Link href="/workspaces" className="flex min-w-0 items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white">
+            <div
+              className={`flex shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white ${
+                isEffectivelyCollapsed ? "h-6 w-6" : "h-8 w-8"
+              }`}
+            >
               <LayoutIcon className="h-4 w-4" />
             </div>
             {!isEffectivelyCollapsed && (
               <span className="truncate text-sm font-semibold text-slate-800">{APP_NAME}</span>
             )}
           </Link>
+          <button
+            onClick={toggleCollapsed}
+            aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!isCollapsed}
+            title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className="hidden h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:flex"
+          >
+            <SidebarIcon className="h-4 w-4" />
+          </button>
           <button
             onClick={() => setIsMobileOpen(false)}
             aria-label="Close navigation"
@@ -292,26 +308,6 @@ export function Sidebar() {
             <XIcon className="h-4 w-4" />
           </button>
         </div>
-
-        {/* Collapse/expand handle: a small floating tab on the sidebar's
-            own edge, vertically centered — not squeezed into the header
-            row alongside the logo. At 64px wide when collapsed, the
-            header row has no room for a second interactive element next
-            to the logo without one sitting on top of the other; a
-            separate edge handle (the same pattern VS Code/Notion/Linear
-            use for their collapsible sidebars) sidesteps the cramping
-            entirely rather than trying to fit both into less space. */}
-        <button
-          onClick={toggleCollapsed}
-          aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="absolute -right-3 top-1/2 z-10 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 shadow-sm hover:text-slate-600 sm:flex"
-        >
-          {isCollapsed ? (
-            <ChevronRightIcon className="h-3.5 w-3.5" />
-          ) : (
-            <ChevronLeftIcon className="h-3.5 w-3.5" />
-          )}
-        </button>
 
         <nav className="scrollbar-thin flex-1 overflow-y-auto px-2 py-3">
           {workspaces.map((ws) => {
