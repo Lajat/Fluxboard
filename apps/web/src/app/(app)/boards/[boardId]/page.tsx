@@ -29,7 +29,7 @@ import { EditableTitle } from "@/components/ui/EditableTitle";
 import { AvatarStack } from "@/components/ui/AvatarStack";
 import { MembersModal } from "@/components/MembersModal";
 import { ChevronLeftIcon, ChevronRightIcon, TrashIcon, PlusIcon, SpinnerIcon } from "@/components/ui/icons";
-import type { Board, List, Card, Workspace, WorkspaceMember, MemberPermissions } from "@fluxboard/shared-types";
+import type { Board, List, Card, Workspace, WorkspaceMember, WorkspacePermissions } from "@fluxboard/shared-types";
 import {
   SocketEvents,
   type CardMovedPayload,
@@ -486,7 +486,7 @@ export default function BoardPage() {
     }
   }
 
-  async function handleUpdateMemberPermissions(member: WorkspaceMember, updates: Partial<MemberPermissions>) {
+  async function handleUpdateMemberPermissions(member: WorkspaceMember, updates: Partial<WorkspacePermissions>) {
     if (!board) return;
     try {
       const res = await apiFetch<{ member: WorkspaceMember }>(

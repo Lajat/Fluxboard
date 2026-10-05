@@ -6,7 +6,7 @@ import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { avatarColorFor, initialsFor } from "@/lib/avatar";
 import { emailError as getEmailError } from "@/lib/validation";
 import { UserPlusIcon, TrashIcon, SpinnerIcon, LinkIcon, CheckIcon, PlusIcon, PencilIcon } from "./ui/icons";
-import type { WorkspaceMember, MemberPermissions } from "@fluxboard/shared-types";
+import type { WorkspaceMember, WorkspacePermissions } from "@fluxboard/shared-types";
 
 interface MembersModalProps {
   open: boolean;
@@ -17,8 +17,8 @@ interface MembersModalProps {
   currentUserId: string;
   onInvite: (email: string) => Promise<void>;
   onRemove: (member: WorkspaceMember) => Promise<void>;
-  /** Flips one of a member's canAdd/canEdit/canDelete flags — owner-only, called from the toggle chips below each non-owner member. */
-  onUpdatePermissions: (member: WorkspaceMember, updates: Partial<MemberPermissions>) => Promise<void>;
+  /** Flips one of a member's six permission flags (board-level + card-level) — owner-only, called from the checkbox grid below each non-owner member. */
+  onUpdatePermissions: (member: WorkspaceMember, updates: Partial<WorkspacePermissions>) => Promise<void>;
   /** Full shareable URL (e.g. "https://app.com/invite/abc123"), or null while it's still loading/not yet fetched. Owner-only feature — parent only needs to fetch this when isOwner is true. */
   inviteLink: string | null;
   isLoadingInviteLink: boolean;
@@ -89,11 +89,38 @@ export function MembersModal({
     }
   }
 
-  async function handleTogglePermission(member: WorkspaceMember, field: keyof MemberPermissions) {
-    const key = `${member.id}-${field}`;
+  /**
+   * Toggles one checkbox, applying the delete-requires-add+edit rule on
+   * the client before the request even goes out (the server enforces the
+   * same rule independently — see updateMemberPermissions — this is purely
+   * so the UI doesn't have to show a rejected-request error for something
+   * that's easy to prevent the user from doing in the first place).
+   *
+   * The cascade: turning OFF Add or Edit while Delete is currently on
+   * also turns Delete off, in the SAME request — not left for a second
+   * click, since a lone "Add off, Delete still on" state would be
+   * rejected by the server anyway.
+   */
+  async function handleTogglePermission(
+    member: WorkspaceMember,
+    axis: "Boards" | "Cards",
+    field: "canAdd" | "canEdit" | "canDelete"
+  ) {
+    const fullField = `${field}${axis}` as keyof WorkspacePermissions;
+    const next = !member.permissions[fullField];
+    const updates: Partial<WorkspacePermissions> = { [fullField]: next } as any;
+
+    if (!next && field !== "canDelete") {
+      const deleteField = `canDelete${axis}` as keyof WorkspacePermissions;
+      if (member.permissions[deleteField]) {
+        updates[deleteField] = false;
+      }
+    }
+
+    const key = `${member.id}-${fullField}`;
     setSavingPermissionKey(key);
     try {
-      await onUpdatePermissions(member, { [field]: !member.permissions[field] });
+      await onUpdatePermissions(member, updates);
     } finally {
       setSavingPermissionKey(null);
     }
@@ -214,42 +241,67 @@ export function MembersModal({
                 )}
               </div>
 
-              {/* Per-member permission toggles — owner-only, and not shown
-                  for the owner's own row since the owner always has full
-                  access by definition (see lib/permissions.ts). Each chip
-                  is independently clickable and reflects its live state,
-                  so the owner can see at a glance what a member can and
-                  can't do without opening a separate settings screen. */}
+              {/* Per-member permission grid — owner-only, and not shown for
+                  the owner's own row since the owner always has full access
+                  by definition (see lib/permissions.ts). Two independent
+                  axes (Boards / Cards — see WorkspacePermissions in
+                  shared-types), each with Add/Edit/Delete. Delete is
+                  disabled (not just unchecked) until both Add and Edit are
+                  already on for that same axis — the dependency rule the
+                  server also enforces independently; disabling it here is
+                  just so the owner never sees a rejected request for
+                  something preventable in the UI itself. */}
               {isOwner && member.role !== "owner" && (
-                <div className="ml-12 mt-1.5 flex gap-1.5">
-                  {(
-                    [
-                      { field: "canAdd" as const, label: "Add", icon: PlusIcon },
-                      { field: "canEdit" as const, label: "Edit", icon: PencilIcon },
-                      { field: "canDelete" as const, label: "Delete", icon: TrashIcon },
-                    ]
-                  ).map(({ field, label, icon: Icon }) => {
-                    const isOn = member.permissions[field];
-                    const isSaving = savingPermissionKey === `${member.id}-${field}`;
+                <div className="ml-12 mt-1.5 space-y-1">
+                  {(["Boards", "Cards"] as const).map((axis) => {
+                    const addField = `canAdd${axis}` as const;
+                    const editField = `canEdit${axis}` as const;
+                    const deleteField = `canDelete${axis}` as const;
+                    const canDeleteBeEnabled = member.permissions[addField] && member.permissions[editField];
+
                     return (
-                      <button
-                        key={field}
-                        onClick={() => handleTogglePermission(member, field)}
-                        disabled={isSaving}
-                        title={`${isOn ? "Revoke" : "Grant"} ${label.toLowerCase()} permission`}
-                        className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition disabled:opacity-50 ${
-                          isOn
-                            ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                            : "bg-slate-100 text-slate-400 hover:bg-slate-200"
-                        }`}
-                      >
-                        {isSaving ? (
-                          <SpinnerIcon className="h-3 w-3" />
-                        ) : (
-                          <Icon className="h-3 w-3" />
-                        )}
-                        {label}
-                      </button>
+                      <div key={axis} className="flex items-center gap-1.5">
+                        <span className="w-12 shrink-0 text-[10px] font-medium uppercase tracking-wide text-slate-300">
+                          {axis}
+                        </span>
+                        {(
+                          [
+                            { field: "canAdd" as const, fullField: addField, label: "Add", icon: PlusIcon },
+                            { field: "canEdit" as const, fullField: editField, label: "Edit", icon: PencilIcon },
+                            { field: "canDelete" as const, fullField: deleteField, label: "Delete", icon: TrashIcon },
+                          ]
+                        ).map(({ field, fullField, label, icon: Icon }) => {
+                          const isOn = member.permissions[fullField];
+                          const isDisabled =
+                            savingPermissionKey === `${member.id}-${fullField}` ||
+                            (field === "canDelete" && !isOn && !canDeleteBeEnabled);
+                          const isSaving = savingPermissionKey === `${member.id}-${fullField}`;
+                          return (
+                            <button
+                              key={fullField}
+                              onClick={() => handleTogglePermission(member, axis, field)}
+                              disabled={isDisabled}
+                              title={
+                                field === "canDelete" && !isOn && !canDeleteBeEnabled
+                                  ? `Requires Add and Edit to be on for ${axis}`
+                                  : `${isOn ? "Revoke" : "Grant"} ${label.toLowerCase()} permission for ${axis.toLowerCase()}`
+                              }
+                              className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
+                                isOn
+                                  ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                  : "bg-slate-100 text-slate-400 hover:bg-slate-200"
+                              }`}
+                            >
+                              {isSaving ? (
+                                <SpinnerIcon className="h-3 w-3" />
+                              ) : (
+                                <Icon className="h-3 w-3" />
+                              )}
+                              {label}
+                            </button>
+                          );
+                        })}
+                      </div>
                     );
                   })}
                 </div>

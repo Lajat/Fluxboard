@@ -8,3 +8,13 @@
  * grep-and-replace across the codebase.
  */
 export const APP_NAME = "Fluxboard";
+
+/**
+ * Kept in sync with package.json's "version" by hand — a client component
+ * can't read package.json directly at runtime without extra build wiring
+ * (e.g. a next.config.js rewrite into NEXT_PUBLIC_*), which felt like a
+ * lot of machinery for a value that changes rarely. Shown in the profile
+ * menu footer, the way most real apps surface their version somewhere in
+ * an account/settings menu rather than on the page itself.
+ */
+export const APP_VERSION = "1.0.0";

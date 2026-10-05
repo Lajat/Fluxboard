@@ -10,12 +10,14 @@ import { apiFetch, ApiError } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
 import { EditableTitle } from "@/components/ui/EditableTitle";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { FolderIcon, LogOutIcon, PlusIcon, TrashIcon, SpinnerIcon } from "@/components/ui/icons";
+import { FolderIcon, PlusIcon, TrashIcon, SpinnerIcon } from "@/components/ui/icons";
+import { ProfileMenu } from "@/components/ProfileMenu";
+import { NotificationBell } from "@/components/NotificationBell";
 import type { Workspace } from "@fluxboard/shared-types";
 import { SocketEvents, type WorkspaceMembershipPayload, type AccessRevokedPayload } from "@fluxboard/shared-types";
 
 export default function WorkspacesPage() {
-  const { user, accessToken, isLoading: authLoading, logout } = useAuth();
+  const { user, accessToken, isLoading: authLoading } = useAuth();
   const { showToast } = useToast();
   const router = useRouter();
   const { setActiveWorkspaceId } = useActiveWorkspace();
@@ -179,18 +181,11 @@ export default function WorkspacesPage() {
             </div>
             <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">Your workspaces</h1>
           </div>
-          <button
-            onClick={logout}
-            className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium text-slate-500 hover:bg-white hover:text-slate-800 hover:shadow-sm"
-          >
-            <LogOutIcon className="h-4 w-4" />
-            <span className="hidden sm:inline">Log out</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <NotificationBell />
+            <ProfileMenu />
+          </div>
         </div>
-
-        <p className="mb-6 text-sm text-slate-500">
-          Signed in as <span className="font-medium text-slate-700">{user.displayName}</span>
-        </p>
 
         {isLoadingWorkspaces ? (
           <div className="flex justify-center py-16">
@@ -198,10 +193,11 @@ export default function WorkspacesPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {workspaces.map((ws) => (
+            {workspaces.map((ws, index) => (
               <div
                 key={ws.id}
-                className="group relative rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-brand-200 hover:shadow-md"
+                style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
+                className="group relative animate-[toast-in_0.3s_ease-out_both] rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-lg"
               >
                 <Link href={`/workspaces/${ws.id}`} className="block">
                   <div className="mb-1 flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-600">

@@ -4,7 +4,7 @@ import { BoardModel } from "../models/Board";
 import { CardModel } from "../models/Card";
 import type { List } from "@fluxboard/shared-types";
 import { SocketEvents } from "@fluxboard/shared-types";
-import { getMemberPermissions, isWorkspaceMember, loadWorkspaceForBoard } from "../lib/permissions";
+import { resolveBoardAccessById } from "../lib/permissions";
 
 /** Converts a Mongoose ListDocument into the shared `List` shape. */
 function toListResponse(doc: any): List {
@@ -19,7 +19,8 @@ function toListResponse(doc: any): List {
 /**
  * POST /boards/:boardId/lists
  * Creates a new list and appends it to the board's listOrder. Requires
- * "add" permission in the board's workspace.
+ * card-level "add" permission — either as a workspace member, or as a
+ * single-board guest with access to this specific board.
  */
 export async function createList(req: Request, res: Response) {
   const { boardId } = req.params;
@@ -29,12 +30,11 @@ export async function createList(req: Request, res: Response) {
     return res.status(400).json({ error: "title is required" });
   }
 
-  const workspace = await loadWorkspaceForBoard(boardId);
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveBoardAccessById(boardId, req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "board not found" });
   }
-  if (!permissions.canAdd) {
+  if (!access.cardPermissions.canAdd) {
     return res.status(403).json({ error: "you don't have permission to add lists to this board" });
   }
 
@@ -59,8 +59,8 @@ export async function createList(req: Request, res: Response) {
 export async function listListsForBoard(req: Request, res: Response) {
   const { boardId } = req.params;
 
-  const workspace = await loadWorkspaceForBoard(boardId);
-  if (!workspace || !isWorkspaceMember(workspace, req.userId!)) {
+  const access = await resolveBoardAccessById(boardId, req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "board not found" });
   }
 
@@ -87,12 +87,11 @@ export async function updateList(req: Request, res: Response) {
     return res.status(400).json({ error: "title is required" });
   }
 
-  const workspace = await loadWorkspaceForBoard(boardId);
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveBoardAccessById(boardId, req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "board not found" });
   }
-  if (!permissions.canEdit) {
+  if (!access.cardPermissions.canEdit) {
     return res.status(403).json({ error: "you don't have permission to edit this board" });
   }
 
@@ -128,12 +127,11 @@ export async function reorderLists(req: Request, res: Response) {
     return res.status(400).json({ error: "listOrder must be an array of list ids" });
   }
 
-  const workspace = await loadWorkspaceForBoard(boardId);
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveBoardAccessById(boardId, req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "board not found" });
   }
-  if (!permissions.canEdit) {
+  if (!access.cardPermissions.canEdit) {
     return res.status(403).json({ error: "you don't have permission to edit this board" });
   }
 
@@ -168,12 +166,11 @@ export async function reorderLists(req: Request, res: Response) {
 export async function deleteList(req: Request, res: Response) {
   const { boardId, listId } = req.params;
 
-  const workspace = await loadWorkspaceForBoard(boardId);
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveBoardAccessById(boardId, req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "board not found" });
   }
-  if (!permissions.canDelete) {
+  if (!access.cardPermissions.canDelete) {
     return res.status(403).json({ error: "you don't have permission to delete lists on this board" });
   }
 

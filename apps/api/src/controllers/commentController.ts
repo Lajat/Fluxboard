@@ -5,7 +5,7 @@ import { ListModel } from "../models/List";
 import { UserModel } from "../models/User";
 import type { Comment } from "@fluxboard/shared-types";
 import { SocketEvents } from "@fluxboard/shared-types";
-import { getMemberPermissions, isWorkspaceMember, loadWorkspaceForList } from "../lib/permissions";
+import { resolveListAccess } from "../lib/permissions";
 
 /** Converts a Mongoose CommentDocument into the shared `Comment` shape. */
 function toCommentResponse(doc: any): Comment {
@@ -31,8 +31,8 @@ export async function listCommentsForCard(req: Request, res: Response) {
     return res.status(404).json({ error: "card not found" });
   }
 
-  const workspace = await loadWorkspaceForList(card.listId.toString());
-  if (!workspace || !isWorkspaceMember(workspace, req.userId!)) {
+  const access = await resolveListAccess(card.listId.toString(), req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "card not found" });
   }
 
@@ -79,12 +79,11 @@ export async function createComment(req: Request, res: Response) {
     return res.status(404).json({ error: "card not found" });
   }
 
-  const workspace = await loadWorkspaceForList(card.listId.toString());
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveListAccess(card.listId.toString(), req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "card not found" });
   }
-  if (!permissions.canAdd) {
+  if (!access.cardPermissions.canAdd) {
     return res.status(403).json({ error: "you don't have permission to comment on this card" });
   }
 

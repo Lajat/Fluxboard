@@ -5,7 +5,7 @@ import { ListModel } from "../models/List";
 import { BoardModel } from "../models/Board";
 import type { Card } from "@fluxboard/shared-types";
 import { SocketEvents } from "@fluxboard/shared-types";
-import { getMemberPermissions, isWorkspaceMember, loadWorkspaceForList } from "../lib/permissions";
+import { resolveListAccess } from "../lib/permissions";
 import { generateKeyPrefix } from "../lib/taskId";
 
 /**
@@ -72,12 +72,11 @@ export async function createCard(req: Request, res: Response) {
     return res.status(404).json({ error: "list not found" });
   }
 
-  const workspace = await loadWorkspaceForList(listId);
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveListAccess(listId, req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "list not found" });
   }
-  if (!permissions.canAdd) {
+  if (!access.cardPermissions.canAdd) {
     return res.status(403).json({ error: "you don't have permission to add cards to this board" });
   }
 
@@ -136,8 +135,8 @@ export async function createCard(req: Request, res: Response) {
 export async function listCardsForList(req: Request, res: Response) {
   const { listId } = req.params;
 
-  const workspace = await loadWorkspaceForList(listId);
-  if (!workspace || !isWorkspaceMember(workspace, req.userId!)) {
+  const access = await resolveListAccess(listId, req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "list not found" });
   }
 
@@ -171,12 +170,11 @@ export async function updateCard(req: Request, res: Response) {
     return res.status(404).json({ error: "card not found" });
   }
 
-  const workspace = await loadWorkspaceForList(existingCard.listId.toString());
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveListAccess(existingCard.listId.toString(), req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "card not found" });
   }
-  if (!permissions.canEdit) {
+  if (!access.cardPermissions.canEdit) {
     return res.status(403).json({ error: "you don't have permission to edit this card" });
   }
 
@@ -225,12 +223,11 @@ export async function deleteCard(req: Request, res: Response) {
     return res.status(404).json({ error: "card not found" });
   }
 
-  const workspace = await loadWorkspaceForList(existingCard.listId.toString());
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveListAccess(existingCard.listId.toString(), req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "card not found" });
   }
-  if (!permissions.canDelete) {
+  if (!access.cardPermissions.canDelete) {
     return res.status(403).json({ error: "you don't have permission to delete this card" });
   }
 
@@ -278,12 +275,11 @@ export async function moveCard(req: Request, res: Response) {
 
   const fromListId = card.listId.toString();
 
-  const workspace = await loadWorkspaceForList(fromListId);
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveListAccess(fromListId, req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "card not found" });
   }
-  if (!permissions.canEdit) {
+  if (!access.cardPermissions.canEdit) {
     return res.status(403).json({ error: "you don't have permission to move this card" });
   }
 

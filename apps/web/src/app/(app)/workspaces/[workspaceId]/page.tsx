@@ -13,7 +13,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AvatarStack } from "@/components/ui/AvatarStack";
 import { MembersModal } from "@/components/MembersModal";
 import { ChevronLeftIcon, LayoutIcon, PlusIcon, TrashIcon, SpinnerIcon } from "@/components/ui/icons";
-import type { Board, Workspace, WorkspaceMember, MemberPermissions } from "@fluxboard/shared-types";
+import type { Board, Workspace, WorkspaceMember, WorkspacePermissions } from "@fluxboard/shared-types";
 import {
   SocketEvents,
   type WorkspaceMembershipPayload,
@@ -248,7 +248,7 @@ export default function WorkspaceBoardsPage() {
     }
   }
 
-  async function handleUpdateMemberPermissions(member: WorkspaceMember, updates: Partial<MemberPermissions>) {
+  async function handleUpdateMemberPermissions(member: WorkspaceMember, updates: Partial<WorkspacePermissions>) {
     try {
       const res = await apiFetch<{ member: WorkspaceMember }>(
         `/workspaces/${workspaceId}/members/${member.id}/permissions`,

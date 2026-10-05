@@ -9,6 +9,7 @@ import { CardModel } from "../models/Card";
 import type { Workspace, WorkspaceMember } from "@fluxboard/shared-types";
 import { SocketEvents } from "@fluxboard/shared-types";
 import { getMemberPermissions } from "../lib/permissions";
+import { notifyUser } from "../lib/notify";
 
 /** Converts a Mongoose WorkspaceDocument into the shared `Workspace` shape sent to the frontend. */
 function toWorkspaceResponse(doc: any): Workspace {
@@ -93,7 +94,7 @@ export async function getWorkspace(req: Request, res: Response) {
     return res.status(404).json({ error: "workspace not found" });
   }
 
-  res.json(toWorkspaceResponse(workspace));
+  res.json({ ...toWorkspaceResponse(workspace), myPermissions: getMemberPermissions(workspace, req.userId!)! });
 }
 
 /**
@@ -196,6 +197,12 @@ function toMemberResponse(user: any, workspace: any): WorkspaceMember {
       canAdd: true,
       canEdit: true,
       canDelete: true,
+      canAddBoards: true,
+      canEditBoards: true,
+      canDeleteBoards: true,
+      canAddCards: true,
+      canEditCards: true,
+      canDeleteCards: true,
     },
   };
 }
@@ -286,6 +293,16 @@ export async function addMember(req: Request, res: Response) {
     workspace: toWorkspaceResponse(workspace),
   });
 
+  // Persisted notification (bell icon), on top of the live-state-update
+  // event above — that event only helps if the invitee already has the
+  // app open; this is what they see the next time they log in if not.
+  await notifyUser(io, userToAdd._id.toString(), {
+    type: "workspace_invite",
+    title: "You were added to a workspace",
+    body: `You now have access to "${workspace.name}".`,
+    link: `/workspaces/${workspaceId}`,
+  });
+
   res.status(201).json({ workspace: toWorkspaceResponse(workspace), member });
 }
 
@@ -343,15 +360,22 @@ export async function removeMember(req: Request, res: Response) {
 
 /**
  * PATCH /workspaces/:workspaceId/members/:userId/permissions
- * Sets a member's canAdd/canEdit/canDelete flags — each field is
- * optional in the request body so the owner can flip just one switch at
- * a time without having to resend the whole set. Owner-only, and the
- * owner can't be targeted (their permissions are always full, by
- * definition — see getMemberPermissions).
+ * Sets a member's permission flags across both axes (board-level and
+ * card-level — see WorkspacePermissions in shared-types for what each
+ * means) — each field is optional in the request body so the owner can
+ * flip just one switch at a time without resending the whole set.
+ * Owner-only, and the owner can't be targeted (their permissions are
+ * always full, by definition — see getMemberPermissions).
+ *
+ * Enforces the delete-requires-add+edit rule server-side, independently
+ * on each axis — the UI disables the Delete checkbox accordingly, but
+ * that's a convenience, not the actual guarantee; a direct API call
+ * bypasses a client-side-only rule entirely, same reasoning as the
+ * dueDate validation in cardController.
  */
 export async function updateMemberPermissions(req: Request, res: Response) {
   const { workspaceId, userId } = req.params;
-  const { canAdd, canEdit, canDelete } = req.body;
+  const { canAddBoards, canEditBoards, canDeleteBoards, canAddCards, canEditCards, canDeleteCards } = req.body;
 
   const workspace = await WorkspaceModel.findById(workspaceId);
   if (!workspace) {
@@ -373,15 +397,45 @@ export async function updateMemberPermissions(req: Request, res: Response) {
 
   let entry = workspace.memberPermissions.find((p) => p.userId.toString() === userId);
   if (!entry) {
-    // First time this member's permissions have ever been touched —
-    // start from the full-access default and apply only the fields this
-    // request actually specified.
-    entry = { userId: new Types.ObjectId(userId), canAdd: true, canEdit: true, canDelete: true };
+    entry = {
+      userId: new Types.ObjectId(userId),
+      canAddBoards: true, canEditBoards: true, canDeleteBoards: true,
+      canAddCards: true, canEditCards: true, canDeleteCards: true,
+    };
     workspace.memberPermissions.push(entry);
+  } else if (entry.canAddBoards === undefined && entry.canAdd !== undefined) {
+    // This entry still has the pre-migration shape (see
+    // getMemberPermissions for the read-side of this same
+    // compatibility handling) — the moment an owner touches it through
+    // this endpoint, upgrade it to the new shape by mapping the old
+    // uniform restriction onto both axes, so it's stored in the current
+    // format going forward rather than perpetuating the old one.
+    entry.canAddBoards = entry.canAdd;
+    entry.canEditBoards = entry.canEdit;
+    entry.canDeleteBoards = entry.canDelete;
+    entry.canAddCards = entry.canAdd;
+    entry.canEditCards = entry.canEdit;
+    entry.canDeleteCards = entry.canDelete;
   }
-  if (canAdd !== undefined) entry.canAdd = !!canAdd;
-  if (canEdit !== undefined) entry.canEdit = !!canEdit;
-  if (canDelete !== undefined) entry.canDelete = !!canDelete;
+
+  if (canAddBoards !== undefined) entry.canAddBoards = !!canAddBoards;
+  if (canEditBoards !== undefined) entry.canEditBoards = !!canEditBoards;
+  if (canDeleteBoards !== undefined) entry.canDeleteBoards = !!canDeleteBoards;
+  if (canAddCards !== undefined) entry.canAddCards = !!canAddCards;
+  if (canEditCards !== undefined) entry.canEditCards = !!canEditCards;
+  if (canDeleteCards !== undefined) entry.canDeleteCards = !!canDeleteCards;
+
+  // Dependency rule, each axis independently: Delete requires Add AND
+  // Edit to already be true on that same axis, after this request's
+  // changes are applied — not just at the moment Delete was checked, so
+  // a request that tries to grant Delete while simultaneously revoking
+  // Add/Edit is rejected too, not just the "Delete alone" case.
+  if (entry.canDeleteBoards && !(entry.canAddBoards && entry.canEditBoards)) {
+    return res.status(400).json({ error: "canDeleteBoards requires canAddBoards and canEditBoards to also be true" });
+  }
+  if (entry.canDeleteCards && !(entry.canAddCards && entry.canEditCards)) {
+    return res.status(400).json({ error: "canDeleteCards requires canAddCards and canEditCards to also be true" });
+  }
 
   await workspace.save();
 
