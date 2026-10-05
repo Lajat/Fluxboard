@@ -28,7 +28,14 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EditableTitle } from "@/components/ui/EditableTitle";
 import { AvatarStack } from "@/components/ui/AvatarStack";
 import { MembersModal } from "@/components/MembersModal";
-import { ChevronLeftIcon, ChevronRightIcon, TrashIcon, PlusIcon, SpinnerIcon } from "@/components/ui/icons";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  TrashIcon,
+  PlusIcon,
+  SpinnerIcon,
+  MoreIcon,
+} from "@/components/ui/icons";
 import type { Board, List, Card, Workspace, WorkspaceMember, WorkspacePermissions } from "@fluxboard/shared-types";
 import {
   SocketEvents,
@@ -88,9 +95,12 @@ export default function BoardPage() {
   // this were somehow bypassed, but preventing the double-request in the
   // first place is simpler than relying on the race-recovery alone).
   const [pendingMoveCardIds, setPendingMoveCardIds] = useState<Set<string>>(new Set());
+  const isMovePending = pendingMoveCardIds.size > 0;
   const [isLoadingBoard, setIsLoadingBoard] = useState(true);
   const [openCard, setOpenCard] = useState<Card | null>(null);
   const [confirmingBoardDelete, setConfirmingBoardDelete] = useState(false);
+  const [isBoardActionsOpen, setIsBoardActionsOpen] = useState(false);
+  const boardActionsRef = useRef<HTMLDivElement>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const { setActiveWorkspaceId } = useActiveWorkspace();
 
@@ -131,6 +141,26 @@ export default function BoardPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
+
+  useEffect(() => {
+    if (!isBoardActionsOpen) return;
+
+    function closeOnOutsideClick(event: PointerEvent) {
+      if (event.target instanceof Node && !boardActionsRef.current?.contains(event.target)) {
+        setIsBoardActionsOpen(false);
+      }
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setIsBoardActionsOpen(false);
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [isBoardActionsOpen]);
 
   const updateScrollState = useCallback(() => {
     const el = scrollRef.current;
@@ -179,8 +209,22 @@ export default function BoardPage() {
     };
   }, [updateScrollState, lists.length]);
 
+  useEffect(() => {
+    if (!isAddingList) return;
+    const frame = window.requestAnimationFrame(() => {
+      const scroller = scrollRef.current;
+      scroller?.scrollTo({ left: scroller.scrollWidth, behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isAddingList]);
+
   function scrollByColumn(direction: 1 | -1) {
     scrollRef.current?.scrollBy({ left: direction * 320, behavior: "smooth" });
+  }
+
+  function openAddList() {
+    setIsAddingList(true);
+    setListTitleError(null);
   }
 
   // Sensors, tuned for BOTH mouse and touch:
@@ -767,6 +811,18 @@ export default function BoardPage() {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
+            {myPermissions.canAdd && (
+              <button
+                type="button"
+                onClick={openAddList}
+                aria-label="Add list"
+                title="Add list"
+                className="flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-sm font-medium text-brand-700 hover:bg-brand-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
+              >
+                <PlusIcon className="h-4 w-4" />
+                <span className="hidden sm:inline">Add list</span>
+              </button>
+            )}
             {members.length > 0 && (
               <AvatarStack
                 members={members}
@@ -775,13 +831,40 @@ export default function BoardPage() {
               />
             )}
             {myPermissions.canDelete && (
-              <button
-                onClick={() => setConfirmingBoardDelete(true)}
-                className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm text-slate-400 hover:bg-red-50 hover:text-red-500"
-              >
-                <TrashIcon className="h-4 w-4" />
-                <span className="hidden sm:inline">Delete board</span>
-              </button>
+              <div ref={boardActionsRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsBoardActionsOpen((open) => !open)}
+                  aria-label="Board actions"
+                  aria-haspopup="menu"
+                  aria-expanded={isBoardActionsOpen}
+                  aria-controls="board-actions-menu"
+                  className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                >
+                  <MoreIcon className="h-5 w-5" />
+                </button>
+                {isBoardActionsOpen && (
+                  <div
+                    id="board-actions-menu"
+                    role="menu"
+                    aria-label="Board actions"
+                    className="absolute right-0 top-full z-20 mt-1 w-44 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setIsBoardActionsOpen(false);
+                        setConfirmingBoardDelete(true);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-red-600 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                      Delete board
+                    </button>
+                  </div>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -805,7 +888,7 @@ export default function BoardPage() {
             ref={scrollRef}
             onScroll={updateScrollState}
             data-dragging={activeCard ? "true" : "false"}
-            className="board-scroll scrollbar-thin absolute inset-0 flex items-start gap-3 overflow-x-auto overflow-y-hidden p-4 sm:gap-4 sm:p-6"
+            className="board-scroll scrollbar-thin absolute inset-0 flex items-stretch gap-3 overflow-x-auto overflow-y-hidden p-4 sm:gap-4 sm:p-6"
           >
             {lists.map((list) => (
               <BoardColumn
@@ -823,10 +906,11 @@ export default function BoardPage() {
                 canEdit={myPermissions.canEdit}
                 canDelete={myPermissions.canDelete}
                 pendingMoveCardIds={pendingMoveCardIds}
+                isBoardMovePending={isMovePending}
               />
             ))}
 
-            {myPermissions.canAdd && (
+            {myPermissions.canAdd && isAddingList && (
             <div className="board-column-snap w-[85vw] shrink-0 sm:w-72">
               {isAddingList ? (
                 <form onSubmit={handleCreateList} className="rounded-xl bg-white p-2.5 shadow-sm ring-1 ring-slate-200">
@@ -873,14 +957,7 @@ export default function BoardPage() {
                     </button>
                   </div>
                 </form>
-              ) : (
-                <button
-                  onClick={() => setIsAddingList(true)}
-                  className="flex w-full items-center gap-1.5 rounded-xl border border-dashed border-slate-300 bg-white/60 px-3 py-3 text-sm text-slate-500 hover:border-brand-300 hover:bg-white hover:text-brand-600"
-                >
-                  <PlusIcon className="h-4 w-4" /> Add a list
-                </button>
-              )}
+              ) : null}
             </div>
             )}
           </div>

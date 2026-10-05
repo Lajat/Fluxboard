@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, FormEvent } from "react";
-import { useDroppable } from "@dnd-kit/core";
+import { useDndContext, useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { TaskCard } from "./TaskCard";
 import { EditableTitle } from "./ui/EditableTitle";
@@ -27,6 +27,7 @@ interface BoardColumnProps {
    *  TaskCard as isMovePending, disabling drag on that specific card
    *  until its move finishes (see TaskCard for why this matters). */
   pendingMoveCardIds: Set<string>;
+  isBoardMovePending: boolean;
 }
 
 /**
@@ -50,8 +51,16 @@ export function BoardColumn({
   canEdit,
   canDelete,
   pendingMoveCardIds,
+  isBoardMovePending,
 }: BoardColumnProps) {
-  const { setNodeRef } = useDroppable({ id: `column-${listId}` });
+  const columnDropId = `column-${listId}`;
+  const { setNodeRef } = useDroppable({ id: columnDropId });
+  const { active, over } = useDndContext();
+  const isActiveDropTarget =
+    !!active &&
+    !!over &&
+    (over.id === columnDropId || cards.some((card) => card.id === over.id));
+  const isDroppingAtEnd = !!active && over?.id === columnDropId;
   const [newCardTitle, setNewCardTitle] = useState("");
   const [isAdding, setIsAdding] = useState(false);
   const [isSubmittingCard, setIsSubmittingCard] = useState(false);
@@ -80,7 +89,13 @@ export function BoardColumn({
   }
 
   return (
-    <div className="board-column-snap flex max-h-full w-[85vw] shrink-0 flex-col rounded-xl bg-slate-100/80 p-2.5 sm:w-72">
+    <div
+      className={`board-column-snap flex h-full max-h-full w-[85vw] shrink-0 flex-col rounded-xl p-2.5 transition-colors sm:w-72 ${
+        isActiveDropTarget
+          ? "bg-brand-50 ring-2 ring-inset ring-brand-300"
+          : "bg-slate-100/80"
+      }`}
+    >
       <div className="mb-2 flex items-center justify-between gap-1 px-1">
         <EditableTitle
           as="h3"
@@ -122,10 +137,21 @@ export function BoardColumn({
               onDelete={onDeleteCard}
               onOpen={onOpenCard}
               canDelete={canDelete}
-              isMovePending={pendingMoveCardIds.has(card.id)}
+              isMovePending={isBoardMovePending || pendingMoveCardIds.has(card.id)}
             />
           ))}
         </SortableContext>
+        {isDroppingAtEnd &&
+          (cards.length === 0 ? (
+            <div className="flex min-h-16 items-center justify-center rounded-lg border-2 border-dashed border-brand-300 bg-white/70 text-xs font-medium text-brand-600">
+              Drop card here
+            </div>
+          ) : (
+            <div
+              aria-hidden="true"
+              className="h-1 shrink-0 rounded-full bg-brand-500 shadow-[0_0_0_2px_white]"
+            />
+          ))}
       </div>
 
       {!canAdd ? null : isAdding ? (

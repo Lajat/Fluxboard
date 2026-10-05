@@ -469,32 +469,18 @@ export function Sidebar() {
                       className={`h-3.5 w-3.5 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
                     />
                   </button>
-                  <Link
-                    href={`/workspaces/${ws.id}`}
-                    title={ws.name}
-                    className="flex min-w-0 flex-1 items-center gap-2"
-                  >
-                    {isEffectivelyCollapsed ? (
-                      // Collapsed: every workspace previously rendered as an
-                      // identical plain folder icon — no way to tell them
-                      // apart without hovering each one for its tooltip. A
-                      // colored initial badge (same deterministic
-                      // color-by-id + initials pattern already used for
-                      // user avatars) makes each workspace visually
-                      // distinct at a glance, the way Slack/Notion's
-                      // collapsed workspace switchers do.
-                      <div
-                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold text-white ${avatarColorFor(
-                          ws.id
-                        )}`}
-                      >
-                        {initialsFor(ws.name)}
-                      </div>
-                    ) : (
-                      <FolderIcon className="h-4 w-4 shrink-0" />
-                    )}
-                    {!isEffectivelyCollapsed && <span className="truncate font-medium">{ws.name}</span>}
-                  </Link>
+                  {isEffectivelyCollapsed ? (
+                    <Link
+                      href={`/workspaces/${ws.id}`}
+                      title={`${ws.name} boards`}
+                      aria-label={`${ws.name} boards`}
+                      className="flex h-6 w-6 items-center justify-center rounded-md text-brand-600"
+                    >
+                      <FolderIcon className="h-4 w-4" />
+                    </Link>
+                  ) : (
+                    <span className="min-w-0 flex-1 truncate font-medium">Boards</span>
+                  )}
                 </div>
 
                 {isExpanded && !isEffectivelyCollapsed && (
