@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, FormEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
@@ -10,7 +10,17 @@ import { apiFetch, ApiError } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
 import { EditableTitle } from "@/components/ui/EditableTitle";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { FolderIcon, PlusIcon, TrashIcon, SpinnerIcon } from "@/components/ui/icons";
+import { Modal } from "@/components/ui/Modal";
+import { avatarColorFor, initialsFor } from "@/lib/avatar";
+import {
+  FolderIcon,
+  PlusIcon,
+  TrashIcon,
+  SpinnerIcon,
+  SearchIcon,
+  GridIcon,
+  ListIcon,
+} from "@/components/ui/icons";
 import { ProfileMenu } from "@/components/ProfileMenu";
 import { NotificationBell } from "@/components/NotificationBell";
 import type { Workspace } from "@fluxboard/shared-types";
@@ -35,9 +45,30 @@ export default function WorkspacesPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [isSubmittingWorkspace, setIsSubmittingWorkspace] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortOrder, setSortOrder] = useState<"name" | "created">("name");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [deletingWorkspace, setDeletingWorkspace] = useState<Workspace | null>(null);
   const deletedWorkspaceIds = useRef(new Set<string>());
   const createWorkspaceInFlight = useRef(false);
+
+  function closeCreateDialog() {
+    if (isSubmittingWorkspace) return;
+    setIsCreating(false);
+    setNewWorkspaceName("");
+    setCreateError(null);
+  }
+
+  const visibleWorkspaces = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase();
+    return workspaces
+      .filter((workspace) => workspace.name.toLocaleLowerCase().includes(query))
+      .sort((a, b) =>
+        sortOrder === "name"
+          ? a.name.localeCompare(b.name)
+          : b.createdAt.localeCompare(a.createdAt)
+      );
+  }, [workspaces, searchQuery, sortOrder]);
 
   // A create reaches this tab through both the socket event and the HTTP
   // response. Upserting by id makes either arrival order safe and prevents
@@ -73,6 +104,21 @@ export default function WorkspacesPage() {
       .finally(() => setIsLoadingWorkspaces(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
+
+  useEffect(() => {
+    function openCreateWorkspace() {
+      setIsCreating(true);
+      setCreateError(null);
+      setSearchQuery("");
+    }
+
+    window.addEventListener("fluxboard:create-workspace", openCreateWorkspace);
+    if (new URLSearchParams(window.location.search).get("create") === "1") {
+      openCreateWorkspace();
+      router.replace("/workspaces", { scroll: false });
+    }
+    return () => window.removeEventListener("fluxboard:create-workspace", openCreateWorkspace);
+  }, [router]);
 
   // If someone adds this user to a workspace while they're sitting on this
   // exact page, the new workspace appears in the grid immediately — no
@@ -181,126 +227,274 @@ export default function WorkspacesPage() {
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-brand-50 via-slate-50 to-slate-50">
-      <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
-        <div className="mb-8 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-sm">
-              <FolderIcon className="h-5 w-5" />
+      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10 lg:px-10">
+        <div className="mb-8 flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-sm">
+                <FolderIcon className="h-5 w-5" />
+              </div>
+              <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">Your workspaces</h1>
             </div>
-            <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">Your workspaces</h1>
+            <p className="mt-2 text-sm text-slate-500">
+              Find and manage the spaces where your team works.
+            </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between gap-3 sm:justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setIsCreating(true);
+                setCreateError(null);
+                setSearchQuery("");
+              }}
+              className="flex items-center gap-2 rounded-lg bg-brand-600 px-3.5 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
+            >
+              <PlusIcon className="h-4 w-4" />
+              New workspace
+            </button>
             <NotificationBell />
             <ProfileMenu />
           </div>
         </div>
+
+        <div className="mb-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center">
+          <label className="relative min-w-0 flex-1">
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search workspaces"
+              aria-label="Search workspaces"
+              className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+            />
+          </label>
+          <div className="flex items-center justify-between gap-3 sm:justify-end">
+            <label className="flex items-center gap-2 text-xs text-slate-500">
+              <span className="whitespace-nowrap">Sort by</span>
+              <select
+                value={sortOrder}
+                onChange={(event) =>
+                  setSortOrder(event.target.value === "created" ? "created" : "name")
+                }
+                aria-label="Sort workspaces"
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-700 outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+              >
+                <option value="name">Name (A–Z)</option>
+                <option value="created">Recently created</option>
+              </select>
+            </label>
+            <div className="flex rounded-lg border border-slate-200 bg-white p-0.5" aria-label="Workspace view">
+              <button
+                type="button"
+                onClick={() => setViewMode("grid")}
+                aria-label="Grid view"
+                aria-pressed={viewMode === "grid"}
+                className={`rounded-md p-1.5 ${
+                  viewMode === "grid" ? "bg-brand-50 text-brand-700" : "text-slate-400 hover:text-slate-700"
+                }`}
+              >
+                <GridIcon className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("list")}
+                aria-label="List view"
+                aria-pressed={viewMode === "list"}
+                className={`rounded-md p-1.5 ${
+                  viewMode === "list" ? "bg-brand-50 text-brand-700" : "text-slate-400 hover:text-slate-700"
+                }`}
+              >
+                <ListIcon className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {!isLoadingWorkspaces && visibleWorkspaces.length > 0 && (
+          <p className="mb-3 text-xs text-slate-500" aria-live="polite">
+            {visibleWorkspaces.length} workspace{visibleWorkspaces.length === 1 ? "" : "s"}
+            {searchQuery.trim() ? " found" : ""}
+          </p>
+        )}
 
         {isLoadingWorkspaces ? (
           <div className="flex justify-center py-16">
             <SpinnerIcon className="h-6 w-6 text-brand-400" />
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {workspaces.map((ws, index) => (
+          <div
+            className={
+              viewMode === "grid"
+                ? "grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"
+                : "space-y-2"
+            }
+          >
+            {visibleWorkspaces.map((ws, index) => (
               <div
                 key={ws.id}
                 style={{ animationDelay: `${Math.min(index, 8) * 40}ms` }}
-                className="group relative animate-[toast-in_0.3s_ease-out_both] rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-lg"
+                className={`group relative animate-[toast-in_0.3s_ease-out_both] rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition duration-200 hover:border-brand-200 hover:shadow-lg ${
+                  viewMode === "grid"
+                    ? "hover:-translate-y-0.5"
+                    : "flex items-center justify-between gap-4"
+                }`}
               >
-                <Link href={`/workspaces/${ws.id}`} className="block">
-                  <div className="mb-1 flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+                <Link
+                  href={`/workspaces/${ws.id}`}
+                  className={`flex ${viewMode === "list" ? "items-center gap-3" : "flex-col"}`}
+                >
+                  <div
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600 ${
+                      viewMode === "grid" ? "mb-1" : ""
+                    }`}
+                  >
                     <FolderIcon className="h-4 w-4" />
                   </div>
-                  <div className="mt-2 pr-8">
+                  <div className={`min-w-0 ${viewMode === "list" ? "flex-1 pr-8" : "mt-2 pr-8"}`}>
                     <EditableTitle
                       as="h2"
                       value={ws.name}
                       onSave={(next) => handleRenameWorkspace(ws.id, next)}
                       className="font-semibold text-slate-900"
                     />
+                    <p className="mt-0.5 text-xs text-slate-400">
+                      {ws.memberIds.length} member{ws.memberIds.length === 1 ? "" : "s"}
+                    </p>
                   </div>
-                  <p className="mt-0.5 text-xs text-slate-400">
-                    {ws.memberIds.length} member{ws.memberIds.length === 1 ? "" : "s"}
-                  </p>
                 </Link>
+                {viewMode === "list" && (
+                  <div className="mr-9 flex shrink-0 items-center gap-6">
+                    {ws.memberPreview && ws.memberPreview.length > 0 && (
+                      <div
+                        className="flex items-center"
+                        aria-label={`${ws.memberPreview.length} workspace members`}
+                      >
+                        {ws.memberPreview.slice(0, 4).map((member, memberIndex) => (
+                          <span
+                            key={member.id}
+                            title={member.displayName}
+                            aria-label={member.displayName}
+                            role="img"
+                            className={`flex h-8 w-8 items-center justify-center rounded-full border-2 border-white text-[10px] font-semibold text-white ${avatarColorFor(
+                              member.id
+                            )} ${memberIndex > 0 ? "-ml-2" : ""}`}
+                          >
+                            {initialsFor(member.displayName)}
+                          </span>
+                        ))}
+                        {ws.memberPreview.length > 4 && (
+                          <span className="-ml-2 flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-slate-100 text-[10px] font-semibold text-slate-600">
+                            +{ws.memberPreview.length - 4}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <div className="hidden min-w-28 text-right sm:block">
+                      <p className="text-[11px] text-slate-400">Created</p>
+                      <time className="text-sm text-slate-600" dateTime={ws.createdAt}>
+                        {new Intl.DateTimeFormat(undefined, {
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                        }).format(new Date(ws.createdAt))}
+                      </time>
+                    </div>
+                  </div>
+                )}
                 <button
                   onClick={() => setDeletingWorkspace(ws)}
                   aria-label={`Delete ${ws.name}`}
-                  className="absolute right-3 top-3 rounded-md p-1.5 text-slate-300 opacity-100 hover:bg-red-50 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100"
+                  className={`absolute right-3 rounded-md p-1.5 text-slate-300 opacity-100 hover:bg-red-50 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100 ${
+                    viewMode === "list" ? "top-1/2 -translate-y-1/2" : "top-3"
+                  }`}
                 >
                   <TrashIcon className="h-4 w-4" />
                 </button>
               </div>
             ))}
+          </div>
+        )}
 
-            {isCreating ? (
-              <form
-                onSubmit={handleCreateWorkspace}
-                className="flex flex-col justify-center rounded-xl border-2 border-dashed border-brand-300 bg-brand-50/50 p-4"
-              >
-                <input
-                  autoFocus
-                  type="text"
-                  placeholder="Workspace name"
-                  value={newWorkspaceName}
-                  onChange={(e) => {
-                    setNewWorkspaceName(e.target.value);
-                    if (createError) setCreateError(null);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === "Escape") {
-                      setIsCreating(false);
-                      setNewWorkspaceName("");
-                      setCreateError(null);
-                    }
-                  }}
-                  aria-invalid={!!createError}
-                  className={`w-full rounded-lg border bg-white px-3 py-2 text-sm outline-none ring-2 ${
-                    createError
-                      ? "border-red-300 ring-red-100"
-                      : "border-brand-300 ring-brand-100"
-                  }`}
-                />
-                {createError && <p className="mt-1 text-xs text-red-600">{createError}</p>}
-                <div className="mt-2 flex gap-2">
-                  <button
-                    type="submit"
-                    disabled={isSubmittingWorkspace}
-                    className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-                  >
-                    {isSubmittingWorkspace ? "Creating..." : "Create"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsCreating(false);
-                      setNewWorkspaceName("");
-                      setCreateError(null);
-                    }}
-                    className="rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-white"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            ) : (
+        {!isLoadingWorkspaces && visibleWorkspaces.length === 0 && !isCreating && (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-white/60 px-5 py-12 text-center">
+            <p className="text-sm font-medium text-slate-700">
+              {workspaces.length === 0 ? "No workspaces yet" : "No matching workspaces"}
+            </p>
+            <p className="mt-1 text-sm text-slate-500">
+              {workspaces.length === 0
+                ? "Create a workspace to get started."
+                : "Try another name or clear your search."}
+            </p>
+            {workspaces.length > 0 && (
               <button
-                onClick={() => setIsCreating(true)}
-                className="flex min-h-[104px] flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 text-sm text-slate-400 hover:border-brand-300 hover:bg-white hover:text-brand-600"
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="mt-3 text-sm font-medium text-brand-600 hover:text-brand-700"
               >
-                <PlusIcon className="h-5 w-5" />
-                New workspace
+                Clear search
               </button>
             )}
           </div>
         )}
-
-        {!isLoadingWorkspaces && workspaces.length === 0 && !isCreating && (
-          <p className="mt-4 text-center text-sm text-slate-400">
-            No workspaces yet — create one above to get started.
-          </p>
-        )}
       </div>
+
+      <Modal
+        open={isCreating}
+        onClose={closeCreateDialog}
+        title="Create a workspace"
+        widthClassName="max-w-md"
+      >
+        <p className="mb-4 text-sm text-slate-500">
+          Give your workspace a name. You can invite members and create boards after it’s set up.
+        </p>
+        <form onSubmit={handleCreateWorkspace}>
+          <label htmlFor="new-workspace-name" className="mb-1.5 block text-sm font-medium text-slate-700">
+            Workspace name
+          </label>
+          <input
+            autoFocus
+            id="new-workspace-name"
+            type="text"
+            placeholder="e.g. Marketing"
+            value={newWorkspaceName}
+            onChange={(event) => {
+              setNewWorkspaceName(event.target.value);
+              if (createError) setCreateError(null);
+            }}
+            aria-invalid={!!createError}
+            aria-describedby={createError ? "workspace-create-error" : undefined}
+            className={`w-full rounded-lg border bg-white px-3 py-2.5 text-sm outline-none ring-2 ${
+              createError
+                ? "border-red-300 ring-red-100"
+                : "border-slate-200 ring-transparent focus:border-brand-300 focus:ring-brand-100"
+            }`}
+          />
+          {createError && (
+            <p id="workspace-create-error" className="mt-1.5 text-sm text-red-600">
+              {createError}
+            </p>
+          )}
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={closeCreateDialog}
+              disabled={isSubmittingWorkspace}
+              className="rounded-lg px-3.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmittingWorkspace}
+              className="rounded-lg bg-brand-600 px-3.5 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700 disabled:cursor-wait disabled:opacity-60"
+            >
+              {isSubmittingWorkspace ? "Creating..." : "Create workspace"}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       <ConfirmDialog
         open={!!deletingWorkspace}

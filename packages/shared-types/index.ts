@@ -28,6 +28,8 @@ export interface Workspace {
   ownerId: string; // User.id of the workspace creator
   memberIds: string[]; // User.id[] of everyone with access
   createdAt: string;
+  /** Lightweight profiles included by the workspace list endpoint for its member-avatar summary. */
+  memberPreview?: WorkspaceMemberPreview[];
   /**
    * The CALLING user's own resolved permissions in this workspace —
    * populated only by GET /workspaces/:id (a list endpoint returning many
@@ -37,6 +39,12 @@ export interface Workspace {
    * access" UI in the workspace page.
    */
   myPermissions?: WorkspacePermissions;
+}
+
+export interface WorkspaceMemberPreview {
+  id: string;
+  displayName: string;
+  avatarUrl?: string;
 }
 
 /** Card-level permissions — add/edit/delete lists, cards, and comments. Shared by workspace members and single-board guests alike, since a guest's access is card-level only. */

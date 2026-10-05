@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, FormEvent } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
@@ -10,9 +10,19 @@ import { apiFetch, ApiError } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
 import { EditableTitle } from "@/components/ui/EditableTitle";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Modal } from "@/components/ui/Modal";
 import { AvatarStack } from "@/components/ui/AvatarStack";
 import { MembersModal } from "@/components/MembersModal";
-import { ChevronLeftIcon, LayoutIcon, PlusIcon, TrashIcon, SpinnerIcon } from "@/components/ui/icons";
+import {
+  ChevronLeftIcon,
+  LayoutIcon,
+  PlusIcon,
+  TrashIcon,
+  SpinnerIcon,
+  SearchIcon,
+  GridIcon,
+  ListIcon,
+} from "@/components/ui/icons";
 import type { Board, Workspace, WorkspaceMember, WorkspacePermissions } from "@fluxboard/shared-types";
 import {
   SocketEvents,
@@ -53,6 +63,9 @@ export default function WorkspaceBoardsPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [isSubmittingBoard, setIsSubmittingBoard] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortOrder, setSortOrder] = useState<"name" | "created">("name");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const createBoardInFlight = useRef(false);
   const [deletingBoard, setDeletingBoard] = useState<Board | null>(null);
   const [isMembersModalOpen, setIsMembersModalOpen] = useState(false);
@@ -65,9 +78,39 @@ export default function WorkspaceBoardsPage() {
   // Same reasoning as the board page's myPermissions — see the comment
   // there for why this defaults to full access while `members` is still
   // loading rather than flashing every button as disabled.
-  const myPermissions = user
-    ? members.find((m) => m.id === user.id)?.permissions ?? { canAdd: true, canEdit: true, canDelete: true }
-    : { canAdd: false, canEdit: false, canDelete: false };
+  const myPermissions: WorkspacePermissions = user
+    ? members.find((m) => m.id === user.id)?.permissions ?? {
+        canAdd: true,
+        canEdit: true,
+        canDelete: true,
+        canAddBoards: true,
+        canEditBoards: true,
+        canDeleteBoards: true,
+        canAddCards: true,
+        canEditCards: true,
+        canDeleteCards: true,
+      }
+    : {
+        canAdd: false,
+        canEdit: false,
+        canDelete: false,
+        canAddBoards: false,
+        canEditBoards: false,
+        canDeleteBoards: false,
+        canAddCards: false,
+        canEditCards: false,
+        canDeleteCards: false,
+      };
+  const visibleBoards = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase();
+    return boards
+      .filter((board) => board.title.toLocaleLowerCase().includes(query))
+      .sort((a, b) =>
+        sortOrder === "name"
+          ? a.title.localeCompare(b.title)
+          : b.createdAt.localeCompare(a.createdAt)
+      );
+  }, [boards, searchQuery, sortOrder]);
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -208,6 +251,13 @@ export default function WorkspaceBoardsPage() {
     }
   }
 
+  function closeCreateDialog() {
+    if (isSubmittingBoard) return;
+    setIsCreating(false);
+    setNewBoardTitle("");
+    setCreateError(null);
+  }
+
   async function handleRenameBoard(boardId: string, title: string) {
     try {
       const updated = await apiFetch<Board>(`/boards/${boardId}`, {
@@ -304,7 +354,7 @@ export default function WorkspaceBoardsPage() {
 
   return (
     <main className="min-h-screen bg-slate-50">
-      <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
+      <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10 lg:px-10">
         <Link
           href="/workspaces"
           className="mb-4 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-brand-600"
@@ -312,113 +362,264 @@ export default function WorkspaceBoardsPage() {
           <ChevronLeftIcon className="h-4 w-4" /> All workspaces
         </Link>
 
-        <div className="mb-8 flex items-center justify-between gap-3">
-          <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">
-            {workspace?.name ?? "Workspace"}
-          </h1>
-          <AvatarStack members={members} onClick={() => setIsMembersModalOpen(true)} />
+        <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">
+              {workspace?.name ?? "Workspace"}
+            </h1>
+            <p className="mt-1.5 text-sm text-slate-500">
+              Browse and manage the boards in this workspace.
+            </p>
+          </div>
+          <div className="flex items-center justify-between gap-3 sm:justify-end">
+            {myPermissions.canAddBoards && (
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreating(true);
+                  setCreateError(null);
+                  setSearchQuery("");
+                }}
+                className="flex items-center gap-2 rounded-lg bg-brand-600 px-3.5 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
+              >
+                <PlusIcon className="h-4 w-4" />
+                New board
+              </button>
+            )}
+            <AvatarStack members={members} onClick={() => setIsMembersModalOpen(true)} />
+          </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {boards.map((board, i) => (
-            <div key={board.id} className="group relative">
-              <Link
-                href={`/boards/${board.id}`}
-                className={`flex h-28 flex-col justify-between rounded-xl bg-gradient-to-br p-3 text-white shadow-sm transition hover:shadow-lg ${
-                  BOARD_GRADIENTS[i % BOARD_GRADIENTS.length]
+        <div className="mb-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center">
+          <label className="relative min-w-0 flex-1">
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search boards"
+              aria-label="Search boards"
+              className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+            />
+          </label>
+          <div className="flex items-center justify-between gap-3 sm:justify-end">
+            <label className="flex items-center gap-2 text-xs text-slate-500">
+              <span className="whitespace-nowrap">Sort by</span>
+              <select
+                value={sortOrder}
+                onChange={(event) =>
+                  setSortOrder(event.target.value === "created" ? "created" : "name")
+                }
+                aria-label="Sort boards"
+                className="rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-sm text-slate-700 outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+              >
+                <option value="name">Name (A–Z)</option>
+                <option value="created">Recently created</option>
+              </select>
+            </label>
+            <div className="flex rounded-lg border border-slate-200 bg-white p-0.5" aria-label="Board view">
+              <button
+                type="button"
+                onClick={() => setViewMode("grid")}
+                aria-label="Grid view"
+                aria-pressed={viewMode === "grid"}
+                className={`rounded-md p-1.5 ${
+                  viewMode === "grid" ? "bg-brand-50 text-brand-700" : "text-slate-400 hover:text-slate-700"
                 }`}
               >
-                <LayoutIcon className="h-5 w-5 opacity-80" />
-                {/* EditableTitle intercepts its own click (preventDefault +
-                    stopPropagation) so clicking the text to rename it
-                    doesn't also trigger this Link's navigation — clicking
-                    anywhere else on the tile still navigates normally. */}
-                <EditableTitle
-                  value={board.title}
-                  onSave={(next) => handleRenameBoard(board.id, next)}
-                  disabled={!myPermissions.canEdit}
-                  className="line-clamp-2 text-sm font-semibold text-white hover:bg-white/15"
-                  inputClassName="w-full rounded-md border border-white/40 bg-white/20 px-1.5 py-0.5 text-sm font-semibold text-white placeholder-white/70 outline-none ring-2 ring-white/30"
-                />
+                <GridIcon className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("list")}
+                aria-label="List view"
+                aria-pressed={viewMode === "list"}
+                className={`rounded-md p-1.5 ${
+                  viewMode === "list" ? "bg-brand-50 text-brand-700" : "text-slate-400 hover:text-slate-700"
+                }`}
+              >
+                <ListIcon className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {!isLoadingBoards && visibleBoards.length > 0 && (
+          <p className="mb-3 text-xs text-slate-500" aria-live="polite">
+            {visibleBoards.length} board{visibleBoards.length === 1 ? "" : "s"}
+            {searchQuery.trim() ? " found" : ""}
+          </p>
+        )}
+
+        <div className={viewMode === "grid" ? "grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3" : "space-y-2"}>
+          {visibleBoards.map((board, i) => (
+            <div
+              key={board.id}
+              className={`group relative ${
+                viewMode === "list"
+                  ? "flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-3 shadow-sm transition hover:border-brand-200 hover:shadow-md"
+                  : ""
+              }`}
+            >
+              <Link
+                href={`/boards/${board.id}`}
+                className={`${
+                  viewMode === "grid"
+                    ? `flex h-28 flex-col justify-between rounded-xl bg-gradient-to-br p-3 text-white shadow-sm transition hover:shadow-lg ${
+                        BOARD_GRADIENTS[i % BOARD_GRADIENTS.length]
+                      }`
+                    : "flex min-w-0 flex-1 items-center gap-3"
+                }`}
+              >
+                {viewMode === "list" && (
+                  <div
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br text-white ${
+                      BOARD_GRADIENTS[i % BOARD_GRADIENTS.length]
+                    }`}
+                  >
+                    <LayoutIcon className="h-5 w-5 opacity-90" />
+                  </div>
+                )}
+                <div className={viewMode === "grid" ? "flex min-h-0 flex-col justify-between" : "min-w-0 flex-1"}>
+                  {viewMode === "grid" && <LayoutIcon className="h-5 w-5 opacity-80" />}
+                  {/* EditableTitle intercepts its own click (preventDefault +
+                      stopPropagation) so renaming doesn't navigate into the board. */}
+                  <EditableTitle
+                    value={board.title}
+                    onSave={(next) => handleRenameBoard(board.id, next)}
+                    disabled={!myPermissions.canEditBoards}
+                    className={`line-clamp-2 text-sm font-semibold ${
+                      viewMode === "grid" ? "text-white hover:bg-white/15" : "text-slate-900"
+                    }`}
+                    inputClassName={`w-full rounded-md px-1.5 py-0.5 text-sm font-semibold outline-none ring-2 ${
+                      viewMode === "grid"
+                        ? "border border-white/40 bg-white/20 text-white placeholder-white/70 ring-white/30"
+                        : "border border-brand-300 bg-white text-slate-900 ring-brand-100"
+                    }`}
+                  />
+                </div>
               </Link>
-              {myPermissions.canDelete && (
+              {viewMode === "list" && (
+                <div className="mr-9 flex shrink-0 items-center gap-6 text-right">
+                  <div className="hidden text-left sm:block">
+                    <p className="text-sm text-slate-700">
+                      {board.listOrder.length} list{board.listOrder.length === 1 ? "" : "s"}
+                    </p>
+                    <p className="text-[11px] text-slate-400">on this board</p>
+                  </div>
+                  <div className="hidden min-w-28 sm:block">
+                    <p className="text-[11px] text-slate-400">Created</p>
+                    <time className="text-sm text-slate-600" dateTime={board.createdAt}>
+                      {new Intl.DateTimeFormat(undefined, {
+                        month: "short",
+                        day: "numeric",
+                        year: "numeric",
+                      }).format(new Date(board.createdAt))}
+                    </time>
+                  </div>
+                </div>
+              )}
+              {myPermissions.canDeleteBoards && (
                 <button
                   onClick={(e) => {
                     e.preventDefault();
                     setDeletingBoard(board);
                   }}
                   aria-label={`Delete ${board.title}`}
-                  className="absolute right-2 top-2 rounded-md bg-black/20 p-1.5 text-white opacity-100 backdrop-blur-sm transition hover:bg-black/40 sm:opacity-0 sm:group-hover:opacity-100"
+                  className={`absolute rounded-md p-1.5 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 ${
+                    viewMode === "grid"
+                      ? "right-2 top-2 bg-black/20 text-white backdrop-blur-sm hover:bg-black/40"
+                      : "right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:bg-red-50 hover:text-red-500"
+                  }`}
                 >
-                  <TrashIcon className="h-3.5 w-3.5" />
+                  <TrashIcon className={viewMode === "grid" ? "h-3.5 w-3.5" : "h-4 w-4"} />
                 </button>
               )}
             </div>
           ))}
 
-          {!myPermissions.canAdd ? null : isCreating ? (
-            <form
-              onSubmit={handleCreateBoard}
-              className="col-span-2 flex h-28 flex-col justify-center rounded-xl border-2 border-dashed border-brand-300 bg-brand-50/50 p-3 sm:col-span-1"
-            >
-              <input
-                autoFocus
-                type="text"
-                placeholder="Board title"
-                value={newBoardTitle}
-                onChange={(e) => {
-                  setNewBoardTitle(e.target.value);
-                  if (createError) setCreateError(null);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") {
-                    setIsCreating(false);
-                    setNewBoardTitle("");
-                    setCreateError(null);
-                  }
-                }}
-                aria-invalid={!!createError}
-                className={`w-full rounded-lg border bg-white px-2.5 py-1.5 text-sm outline-none ring-2 ${
-                  createError ? "border-red-300 ring-red-100" : "border-brand-300 ring-brand-100"
-                }`}
-              />
-              {createError && <p className="mt-1 text-[11px] text-red-600">{createError}</p>}
-              <div className="mt-2 flex gap-1.5">
-                <button
-                  type="submit"
-                  disabled={isSubmittingBoard}
-                  className="rounded-lg bg-brand-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-                >
-                  {isSubmittingBoard ? "Creating..." : "Create"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsCreating(false);
-                    setNewBoardTitle("");
-                    setCreateError(null);
-                  }}
-                  className="rounded-lg px-2.5 py-1 text-xs text-slate-500 hover:bg-white"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          ) : (
-            <button
-              onClick={() => setIsCreating(true)}
-              className="flex h-28 flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-slate-200 text-sm text-slate-400 hover:border-brand-300 hover:bg-white hover:text-brand-600"
-            >
-              <PlusIcon className="h-5 w-5" />
-              New board
-            </button>
-          )}
         </div>
 
-        {boards.length === 0 && !isCreating && (
-          <p className="mt-4 text-center text-sm text-slate-400">No boards yet — create one above.</p>
+        {!isLoadingBoards && visibleBoards.length === 0 && (
+          <div className="rounded-xl border border-dashed border-slate-300 bg-white/60 px-5 py-12 text-center">
+            <p className="text-sm font-medium text-slate-700">
+              {boards.length === 0 ? "No boards yet" : "No matching boards"}
+            </p>
+            <p className="mt-1 text-sm text-slate-500">
+              {boards.length === 0
+                ? myPermissions.canAddBoards
+                  ? "Create a board to start organizing work."
+                  : "Boards created in this workspace will appear here."
+                : "Try another name or clear your search."}
+            </p>
+            {boards.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="mt-3 text-sm font-medium text-brand-600 hover:text-brand-700"
+              >
+                Clear search
+              </button>
+            )}
+          </div>
         )}
       </div>
+
+      <Modal
+        open={isCreating}
+        onClose={closeCreateDialog}
+        title="Create a board"
+        widthClassName="max-w-md"
+      >
+        <p className="mb-4 text-sm text-slate-500">
+          Give your board a name. You can add lists and tasks once it’s created.
+        </p>
+        <form onSubmit={handleCreateBoard}>
+          <label htmlFor="new-board-title" className="mb-1.5 block text-sm font-medium text-slate-700">
+            Board name
+          </label>
+          <input
+            autoFocus
+            id="new-board-title"
+            type="text"
+            placeholder="e.g. Product roadmap"
+            value={newBoardTitle}
+            onChange={(event) => {
+              setNewBoardTitle(event.target.value);
+              if (createError) setCreateError(null);
+            }}
+            aria-invalid={!!createError}
+            aria-describedby={createError ? "board-create-error" : undefined}
+            className={`w-full rounded-lg border bg-white px-3 py-2.5 text-sm outline-none ring-2 ${
+              createError
+                ? "border-red-300 ring-red-100"
+                : "border-slate-200 ring-transparent focus:border-brand-300 focus:ring-brand-100"
+            }`}
+          />
+          {createError && (
+            <p id="board-create-error" className="mt-1.5 text-sm text-red-600">
+              {createError}
+            </p>
+          )}
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={closeCreateDialog}
+              disabled={isSubmittingBoard}
+              className="rounded-lg px-3.5 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={isSubmittingBoard}
+              className="rounded-lg bg-brand-600 px-3.5 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700 disabled:cursor-wait disabled:opacity-60"
+            >
+              {isSubmittingBoard ? "Creating..." : "Create board"}
+            </button>
+          </div>
+        </form>
+      </Modal>
 
       <ConfirmDialog
         open={!!deletingBoard}

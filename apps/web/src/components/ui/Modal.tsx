@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { XIcon } from "./icons";
 
@@ -19,10 +19,14 @@ interface ModalProps {
  * top of everything regardless of where in the tree it's opened from.
  */
 export function Modal({ open, onClose, title, children, widthClassName = "max-w-lg" }: ModalProps) {
+  const titleId = useId();
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!open) return;
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
     }
     document.addEventListener("keydown", handleKeyDown);
     // Prevent the page behind the modal from scrolling while it's open —
@@ -34,7 +38,7 @@ export function Modal({ open, onClose, title, children, widthClassName = "max-w-
       document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = previousOverflow;
     };
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open || typeof document === "undefined") return null;
 
@@ -46,12 +50,13 @@ export function Modal({ open, onClose, title, children, widthClassName = "max-w-
       <div
         role="dialog"
         aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
         onClick={(e) => e.stopPropagation()}
         className={`scrollbar-thin max-h-[90vh] w-full ${widthClassName} overflow-y-auto rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 animate-[modal-in_0.15s_ease-out]`}
       >
         {title && (
           <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-            <h2 className="text-base font-semibold text-slate-900">{title}</h2>
+            <h2 id={titleId} className="text-base font-semibold text-slate-900">{title}</h2>
             <button
               onClick={onClose}
               aria-label="Close"

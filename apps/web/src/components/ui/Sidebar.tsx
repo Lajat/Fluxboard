@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
@@ -19,6 +19,7 @@ import {
   LogOutIcon,
   PlusIcon,
   SpinnerIcon,
+  SearchIcon,
 } from "./icons";
 import type { Board, Workspace } from "@fluxboard/shared-types";
 import {
@@ -30,10 +31,9 @@ import {
 const COLLAPSE_STORAGE_KEY = "fluxboard_sidebar_collapsed";
 
 /**
- * Persistent navigation for every authenticated page: lists every
- * workspace the user belongs to, and — expanded on click — the boards
- * inside it, so switching between them never requires the "back to
- * workspaces" round trip the individual pages otherwise need.
+ * Persistent navigation for every authenticated page: a searchable
+ * workspace switcher keeps the full list out of the sidebar, while the
+ * selected workspace's boards remain one click away.
  *
  * Responsive in two different ways depending on screen size:
  *  - Desktop (sm+): a persistent rail, collapsible between a full view
@@ -51,6 +51,9 @@ export function Sidebar() {
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [isWorkspaceMenuOpen, setIsWorkspaceMenuOpen] = useState(false);
+  const [workspaceQuery, setWorkspaceQuery] = useState("");
+  const workspaceMenuRef = useRef<HTMLDivElement>(null);
   const [boardsByWorkspace, setBoardsByWorkspace] = useState<Record<string, Board[]>>({});
   const [loadingBoardsFor, setLoadingBoardsFor] = useState<string | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -198,6 +201,31 @@ export function Sidebar() {
     setIsMobileOpen(false);
   }, [pathname]);
 
+  useEffect(() => {
+    setIsWorkspaceMenuOpen(false);
+    setWorkspaceQuery("");
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!isWorkspaceMenuOpen) return;
+
+    function closeOnOutsideClick(event: PointerEvent) {
+      if (event.target instanceof Node && !workspaceMenuRef.current?.contains(event.target)) {
+        setIsWorkspaceMenuOpen(false);
+      }
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setIsWorkspaceMenuOpen(false);
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [isWorkspaceMenuOpen]);
+
   async function loadBoards(workspaceId: string) {
     setLoadingBoardsFor(workspaceId);
     try {
@@ -231,7 +259,19 @@ export function Sidebar() {
     });
   }
 
+  function openWorkspaceCreation(e: MouseEvent<HTMLAnchorElement>) {
+    setIsWorkspaceMenuOpen(false);
+    if (pathname === "/workspaces") {
+      e.preventDefault();
+      window.dispatchEvent(new Event("fluxboard:create-workspace"));
+    }
+  }
+
   if (!user) return null;
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
+  const filteredWorkspaces = workspaces.filter((workspace) =>
+    workspace.name.toLocaleLowerCase().includes(workspaceQuery.trim().toLocaleLowerCase())
+  );
 
   return (
     <>
@@ -309,8 +349,106 @@ export function Sidebar() {
           </button>
         </div>
 
+        <div ref={workspaceMenuRef} className="relative border-b border-slate-100 p-2">
+          <button
+            type="button"
+            onClick={() => setIsWorkspaceMenuOpen((open) => !open)}
+            aria-expanded={isWorkspaceMenuOpen}
+            aria-controls="workspace-switcher-options"
+            aria-label={activeWorkspace?.name ?? "Choose workspace"}
+            title={activeWorkspace?.name ?? "Choose workspace"}
+            className={`flex w-full items-center rounded-lg text-left text-sm text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+              isEffectivelyCollapsed ? "justify-center p-1.5" : "gap-2 px-2 py-2"
+            }`}
+          >
+            <div
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold text-white ${
+                activeWorkspace ? avatarColorFor(activeWorkspace.id) : "bg-brand-600"
+              }`}
+            >
+              {activeWorkspace ? initialsFor(activeWorkspace.name) : <LayoutIcon className="h-4 w-4" />}
+            </div>
+            {!isEffectivelyCollapsed && (
+              <>
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {activeWorkspace?.name ?? "Workspaces"}
+                </span>
+                <ChevronDownIcon
+                  className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
+                    isWorkspaceMenuOpen ? "rotate-180" : ""
+                  }`}
+                />
+              </>
+            )}
+          </button>
+
+          {isWorkspaceMenuOpen && (
+            <div className="absolute left-2 right-2 top-full z-50 mt-1 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+              <label className="relative block">
+                <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="search"
+                  value={workspaceQuery}
+                  onChange={(event) => setWorkspaceQuery(event.target.value)}
+                  placeholder="Find a workspace"
+                  aria-label="Find a workspace"
+                  className="w-full rounded-lg border border-slate-200 py-2 pl-8 pr-2 text-xs outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+                />
+              </label>
+              <div
+                id="workspace-switcher-options"
+                role="listbox"
+                aria-label="Workspaces"
+                className="scrollbar-thin mt-2 max-h-60 overflow-y-auto"
+              >
+                {filteredWorkspaces.map((workspace) => (
+                  <Link
+                    key={workspace.id}
+                    href={`/workspaces/${workspace.id}`}
+                    role="option"
+                    aria-selected={workspace.id === activeWorkspaceId}
+                    onClick={() => setIsWorkspaceMenuOpen(false)}
+                    className={`flex items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-slate-50 ${
+                      workspace.id === activeWorkspaceId ? "bg-brand-50 text-brand-700" : "text-slate-700"
+                    }`}
+                  >
+                    <span
+                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[9px] font-semibold text-white ${avatarColorFor(
+                        workspace.id
+                      )}`}
+                    >
+                      {initialsFor(workspace.name)}
+                    </span>
+                    <span className="truncate">{workspace.name}</span>
+                  </Link>
+                ))}
+                {filteredWorkspaces.length === 0 && (
+                  <p className="px-2 py-3 text-center text-xs text-slate-400">No matching workspaces</p>
+                )}
+              </div>
+              <div className="mt-1 border-t border-slate-100 pt-1">
+                <Link
+                  href="/workspaces?create=1"
+                  onClick={openWorkspaceCreation}
+                  className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium text-brand-600 hover:bg-brand-50"
+                >
+                  <PlusIcon className="h-4 w-4" />
+                  Create workspace
+                </Link>
+                <Link
+                  href="/workspaces"
+                  onClick={() => setIsWorkspaceMenuOpen(false)}
+                  className="block rounded-lg px-2 py-2 text-xs text-slate-500 hover:bg-slate-50"
+                >
+                  View all workspaces
+                </Link>
+              </div>
+            </div>
+          )}
+        </div>
+
         <nav className="scrollbar-thin flex-1 overflow-y-auto px-2 py-3">
-          {workspaces.map((ws) => {
+          {workspaces.filter((workspace) => workspace.id === activeWorkspaceId).map((ws) => {
             const isExpanded = expandedId === ws.id;
             const isActive = activeWorkspaceId === ws.id;
             const boards = boardsByWorkspace[ws.id];
@@ -395,14 +533,6 @@ export function Sidebar() {
             );
           })}
 
-          {!isEffectivelyCollapsed && (
-            <Link
-              href="/workspaces"
-              className="mt-2 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-slate-400 hover:bg-slate-50 hover:text-brand-600"
-            >
-              <PlusIcon className="h-3.5 w-3.5" /> New workspace
-            </Link>
-          )}
         </nav>
 
         <div className="border-t border-slate-100 p-2">
