@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useRef, useState, FormEvent } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
@@ -51,7 +51,9 @@ export default function WorkspaceBoardsPage() {
   const [isLoadingBoards, setIsLoadingBoards] = useState(true);
   const [newBoardTitle, setNewBoardTitle] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  const [isSubmittingBoard, setIsSubmittingBoard] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  const createBoardInFlight = useRef(false);
   const [deletingBoard, setDeletingBoard] = useState<Board | null>(null);
   const [isMembersModalOpen, setIsMembersModalOpen] = useState(false);
   const [inviteToken, setInviteToken] = useState<string | null>(null);
@@ -180,11 +182,14 @@ export default function WorkspaceBoardsPage() {
 
   async function handleCreateBoard(e: FormEvent) {
     e.preventDefault();
+    if (createBoardInFlight.current) return;
     if (!newBoardTitle.trim()) {
       setCreateError("Board title is required.");
       return;
     }
 
+    createBoardInFlight.current = true;
+    setIsSubmittingBoard(true);
     try {
       const created = await apiFetch<Board>(`/workspaces/${workspaceId}/boards`, {
         method: "POST",
@@ -197,6 +202,9 @@ export default function WorkspaceBoardsPage() {
       setCreateError(null);
     } catch (err) {
       showToast(err instanceof ApiError ? err.message : "Failed to create board", "error");
+    } finally {
+      createBoardInFlight.current = false;
+      setIsSubmittingBoard(false);
     }
   }
 
@@ -362,7 +370,13 @@ export default function WorkspaceBoardsPage() {
                   setNewBoardTitle(e.target.value);
                   if (createError) setCreateError(null);
                 }}
-                onKeyDown={(e) => e.key === "Escape" && setIsCreating(false)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") {
+                    setIsCreating(false);
+                    setNewBoardTitle("");
+                    setCreateError(null);
+                  }
+                }}
                 aria-invalid={!!createError}
                 className={`w-full rounded-lg border bg-white px-2.5 py-1.5 text-sm outline-none ring-2 ${
                   createError ? "border-red-300 ring-red-100" : "border-brand-300 ring-brand-100"
@@ -372,14 +386,16 @@ export default function WorkspaceBoardsPage() {
               <div className="mt-2 flex gap-1.5">
                 <button
                   type="submit"
-                  className="rounded-lg bg-brand-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-700"
+                  disabled={isSubmittingBoard}
+                  className="rounded-lg bg-brand-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-700 disabled:opacity-50"
                 >
-                  Create
+                  {isSubmittingBoard ? "Creating..." : "Create"}
                 </button>
                 <button
                   type="button"
                   onClick={() => {
                     setIsCreating(false);
+                    setNewBoardTitle("");
                     setCreateError(null);
                   }}
                   className="rounded-lg px-2.5 py-1 text-xs text-slate-500 hover:bg-white"

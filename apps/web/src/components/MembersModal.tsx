@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useRef, useState, FormEvent } from "react";
 import { Modal } from "./ui/Modal";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { avatarColorFor, initialsFor } from "@/lib/avatar";
@@ -51,6 +51,7 @@ export function MembersModal({
   const [touched, setTouched] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [isInviting, setIsInviting] = useState(false);
+  const inviteInFlight = useRef(false);
   const [removingMember, setRemovingMember] = useState<WorkspaceMember | null>(null);
   const [confirmingRegenerate, setConfirmingRegenerate] = useState(false);
   const [justCopied, setJustCopied] = useState(false);
@@ -60,10 +61,12 @@ export function MembersModal({
 
   async function handleInvite(e: FormEvent) {
     e.preventDefault();
+    if (inviteInFlight.current) return;
     setTouched(true);
     setInviteError(null);
     if (validationError) return;
 
+    inviteInFlight.current = true;
     setIsInviting(true);
     try {
       await onInvite(email.trim());
@@ -72,6 +75,7 @@ export function MembersModal({
     } catch (err) {
       setInviteError(err instanceof Error ? err.message : "Failed to send invite.");
     } finally {
+      inviteInFlight.current = false;
       setIsInviting(false);
     }
   }

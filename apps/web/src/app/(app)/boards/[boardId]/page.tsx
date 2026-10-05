@@ -76,7 +76,9 @@ export default function BoardPage() {
   const [cardsById, setCardsById] = useState<Record<string, Card>>({});
   const [newListTitle, setNewListTitle] = useState("");
   const [isAddingList, setIsAddingList] = useState(false);
+  const [isSubmittingList, setIsSubmittingList] = useState(false);
   const [listTitleError, setListTitleError] = useState<string | null>(null);
+  const createListInFlight = useRef(false);
   const [activeCard, setActiveCard] = useState<Card | null>(null);
   // Tracks card ids with a move request currently in flight. Dragging the
   // same card again before its previous PATCH /cards/:id/move response
@@ -527,11 +529,14 @@ export default function BoardPage() {
 
   async function handleCreateList(e: FormEvent) {
     e.preventDefault();
+    if (createListInFlight.current) return;
     if (!newListTitle.trim()) {
       setListTitleError("List name is required.");
       return;
     }
 
+    createListInFlight.current = true;
+    setIsSubmittingList(true);
     try {
       const created = await apiFetch<List>(`/boards/${boardId}/lists`, {
         method: "POST",
@@ -546,6 +551,9 @@ export default function BoardPage() {
       setListTitleError(null);
     } catch (err) {
       showToast(err instanceof ApiError ? err.message : "Failed to create list", "error");
+    } finally {
+      createListInFlight.current = false;
+      setIsSubmittingList(false);
     }
   }
 
@@ -831,7 +839,13 @@ export default function BoardPage() {
                       setNewListTitle(e.target.value);
                       if (listTitleError) setListTitleError(null);
                     }}
-                    onKeyDown={(e) => e.key === "Escape" && setIsAddingList(false)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        setIsAddingList(false);
+                        setNewListTitle("");
+                        setListTitleError(null);
+                      }
+                    }}
                     aria-invalid={!!listTitleError}
                     className={`w-full rounded-md border px-2.5 py-1.5 text-sm outline-none ring-2 ${
                       listTitleError ? "border-red-300 ring-red-100" : "border-brand-300 ring-brand-100"
@@ -841,14 +855,16 @@ export default function BoardPage() {
                   <div className="mt-1.5 flex gap-1.5">
                     <button
                       type="submit"
+                      disabled={isSubmittingList}
                       className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
                     >
-                      Add list
+                      {isSubmittingList ? "Adding..." : "Add list"}
                     </button>
                     <button
                       type="button"
                       onClick={() => {
                         setIsAddingList(false);
+                        setNewListTitle("");
                         setListTitleError(null);
                       }}
                       className="rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-slate-100"

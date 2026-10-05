@@ -33,9 +33,11 @@ export default function WorkspacesPage() {
   const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(true);
   const [newWorkspaceName, setNewWorkspaceName] = useState("");
   const [isCreating, setIsCreating] = useState(false);
+  const [isSubmittingWorkspace, setIsSubmittingWorkspace] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
   const [deletingWorkspace, setDeletingWorkspace] = useState<Workspace | null>(null);
   const deletedWorkspaceIds = useRef(new Set<string>());
+  const createWorkspaceInFlight = useRef(false);
 
   // A create reaches this tab through both the socket event and the HTTP
   // response. Upserting by id makes either arrival order safe and prevents
@@ -116,11 +118,14 @@ export default function WorkspacesPage() {
 
   async function handleCreateWorkspace(e: FormEvent) {
     e.preventDefault();
+    if (createWorkspaceInFlight.current) return;
     if (!newWorkspaceName.trim()) {
       setCreateError("Workspace name is required.");
       return;
     }
 
+    createWorkspaceInFlight.current = true;
+    setIsSubmittingWorkspace(true);
     try {
       const created = await apiFetch<Workspace>("/workspaces", {
         method: "POST",
@@ -133,6 +138,9 @@ export default function WorkspacesPage() {
       setCreateError(null);
     } catch (err) {
       showToast(err instanceof ApiError ? err.message : "Failed to create workspace", "error");
+    } finally {
+      createWorkspaceInFlight.current = false;
+      setIsSubmittingWorkspace(false);
     }
   }
 
@@ -239,7 +247,13 @@ export default function WorkspacesPage() {
                     setNewWorkspaceName(e.target.value);
                     if (createError) setCreateError(null);
                   }}
-                  onKeyDown={(e) => e.key === "Escape" && setIsCreating(false)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      setIsCreating(false);
+                      setNewWorkspaceName("");
+                      setCreateError(null);
+                    }
+                  }}
                   aria-invalid={!!createError}
                   className={`w-full rounded-lg border bg-white px-3 py-2 text-sm outline-none ring-2 ${
                     createError
@@ -251,14 +265,16 @@ export default function WorkspacesPage() {
                 <div className="mt-2 flex gap-2">
                   <button
                     type="submit"
-                    className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
+                    disabled={isSubmittingWorkspace}
+                    className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
                   >
-                    Create
+                    {isSubmittingWorkspace ? "Creating..." : "Create"}
                   </button>
                   <button
                     type="button"
                     onClick={() => {
                       setIsCreating(false);
+                      setNewWorkspaceName("");
                       setCreateError(null);
                     }}
                     className="rounded-lg px-3 py-1.5 text-sm text-slate-500 hover:bg-white"

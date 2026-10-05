@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useRef, useState, FormEvent } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { TaskCard } from "./TaskCard";
@@ -14,7 +14,7 @@ interface BoardColumnProps {
   title: string;
   cards: Card[];
   members: WorkspaceMember[];
-  onAddCard: (listId: string, title: string) => void;
+  onAddCard: (listId: string, title: string) => Promise<void>;
   onDeleteCard: (cardId: string) => void;
   onOpenCard: (card: Card) => void;
   onRenameList: (listId: string, title: string) => Promise<void>;
@@ -54,16 +54,27 @@ export function BoardColumn({
   const { setNodeRef } = useDroppable({ id: `column-${listId}` });
   const [newCardTitle, setNewCardTitle] = useState("");
   const [isAdding, setIsAdding] = useState(false);
+  const [isSubmittingCard, setIsSubmittingCard] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [cardTitleError, setCardTitleError] = useState<string | null>(null);
+  const addCardInFlight = useRef(false);
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
+    if (addCardInFlight.current) return;
     if (!newCardTitle.trim()) {
       setCardTitleError("Card title is required.");
       return;
     }
-    onAddCard(listId, newCardTitle);
+
+    addCardInFlight.current = true;
+    setIsSubmittingCard(true);
+    try {
+      await onAddCard(listId, newCardTitle);
+    } finally {
+      addCardInFlight.current = false;
+      setIsSubmittingCard(false);
+    }
     setNewCardTitle("");
     setCardTitleError(null);
   }
@@ -148,9 +159,10 @@ export function BoardColumn({
           <div className="flex items-center gap-1.5">
             <button
               type="submit"
-              className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
+              disabled={isSubmittingCard}
+              className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
             >
-              Add card
+              {isSubmittingCard ? "Adding..." : "Add card"}
             </button>
             <button
               type="button"
