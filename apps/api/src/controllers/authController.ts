@@ -10,8 +10,12 @@ const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000; // 15 minutes — sent with every re
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — only used to mint new access tokens
 const ACCESS_TOKEN_TTL_JWT = "15m";
 const REFRESH_TOKEN_TTL_JWT = "30d";
+const REFRESH_COOKIE_PATH = "/api-proxy/auth/refresh";
 
 const isProd = process.env.NODE_ENV === "production";
+const authCookieOptions = isProd
+  ? ({ secure: true, sameSite: "none" } as const)
+  : ({ secure: false, sameSite: "lax" } as const);
 
 /**
  * Converts a Mongoose UserDocument into the public `User` shape from
@@ -58,45 +62,37 @@ function issueTokens(userId: string) {
  * The two cookies deliberately have different scopes:
  *  - accessToken: path "/" (sent with every request, since every
  *    authenticated route needs it)
- *  - refreshToken: path "/auth/refresh" ONLY (sent with nothing else) —
+ *  - refreshToken: path "/api-proxy/auth/refresh" ONLY (sent with nothing
+ *    else) —
  *    this means even if an attacker found a way to read response
  *    headers/cookies for some OTHER endpoint, the long-lived refresh
  *    token was never exposed there in the first place. Scoping it this
  *    narrowly is the main extra protection a refresh token gets beyond
  *    just being httpOnly.
- * Both cookies use the same environment-specific SameSite policy because
- * the frontend and API are separate origins in development and production.
+ * REST calls are proxied through the frontend's same origin. Socket.IO
+ * still connects directly to the API, so production cookies retain
+ * SameSite=None for that cross-site handshake.
  */
 function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
-  // sameSite must be "none" in production: the frontend (vercel.app) and
-  // backend (cloudfront.net) are different registrable domains, so every
-  // API call is a cross-site request from the browser's point of view.
-  // "lax"/"strict" both silently block the cookie on cross-site fetch()
-  // calls — only "none" (paired with secure: true, required by spec)
-  // actually gets sent. Locally, frontend and backend share the domain
-  // "localhost" (only the port differs), which the SameSite spec treats
-  // as same-site — so "lax" over plain http still works there.
-  const crossSiteCookieOptions = isProd
-    ? ({ secure: true, sameSite: "none" } as const)
-    : ({ secure: false, sameSite: "lax" } as const);
-
   res.cookie("accessToken", accessToken, {
     httpOnly: true,
-    ...crossSiteCookieOptions,
+    ...authCookieOptions,
     maxAge: ACCESS_TOKEN_TTL_MS,
     path: "/",
   });
   res.cookie("refreshToken", refreshToken, {
     httpOnly: true,
-    ...crossSiteCookieOptions,
+    ...authCookieOptions,
     maxAge: REFRESH_TOKEN_TTL_MS,
-    path: "/auth/refresh",
+    path: REFRESH_COOKIE_PATH,
   });
 }
 
 function clearAuthCookies(res: Response) {
   res.clearCookie("accessToken", { path: "/" });
-  res.clearCookie("refreshToken", { path: "/auth/refresh" });
+  res.clearCookie("refreshToken", {
+    path: REFRESH_COOKIE_PATH,
+  });
 }
 
 /**

@@ -1,4 +1,4 @@
-# fluxboard
+# Fluxboard
 
 A real-time collaborative Kanban board — Trello-style boards, lists, and
 cards with live multi-user sync, granular permissions, and shareable invite
