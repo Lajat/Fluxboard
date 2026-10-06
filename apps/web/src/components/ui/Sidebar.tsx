@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveWorkspace } from "@/context/ActiveWorkspaceContext";
+import { NotificationBell } from "@/components/NotificationBell";
 import { apiFetch } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
 import { APP_NAME } from "@/lib/constants";
@@ -241,13 +242,17 @@ export function Sidebar() {
     }
   }
 
+  function expandWorkspace(workspaceId: string) {
+    setExpandedId(workspaceId);
+    if (!boardsByWorkspace[workspaceId]) loadBoards(workspaceId);
+  }
+
   function toggleExpand(workspaceId: string) {
     if (expandedId === workspaceId) {
       setExpandedId(null);
       return;
     }
-    setExpandedId(workspaceId);
-    if (!boardsByWorkspace[workspaceId]) loadBoards(workspaceId);
+    expandWorkspace(workspaceId);
   }
 
   function toggleCollapsed() {
@@ -301,6 +306,9 @@ export function Sidebar() {
           </div>
           <span className="text-sm font-semibold text-slate-800">{APP_NAME}</span>
         </div>
+        <div className="ml-auto flex items-center">
+          <NotificationBell />
+        </div>
       </div>
 
       {isMobileOpen && (
@@ -316,33 +324,56 @@ export function Sidebar() {
         } ${isCollapsed ? "sm:w-16" : "sm:w-64"}`}
       >
         <div
-          className={`flex items-center justify-between border-b border-slate-100 py-3 ${
-            isEffectivelyCollapsed ? "gap-2 px-1" : "gap-2 px-3"
+          className={`flex border-b border-slate-100 py-3 ${
+            isEffectivelyCollapsed
+              ? "flex-col items-center gap-2 px-0"
+              : "items-center justify-between gap-2 px-3"
           }`}
         >
-          <Link href="/workspaces" title={isEffectivelyCollapsed ? APP_NAME : undefined} className="flex min-w-0 items-center gap-2">
-            <div
-              className={`flex shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white ${
-                isEffectivelyCollapsed ? "h-6 w-6" : "h-8 w-8"
-              }`}
-            >
-              <LayoutIcon className="h-4 w-4" />
-            </div>
-            {!isEffectivelyCollapsed && (
-              <span className="truncate text-sm font-semibold text-slate-800">{APP_NAME}</span>
-            )}
-          </Link>
-          <button
-            onClick={toggleCollapsed}
-            aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            aria-expanded={!isCollapsed}
-            title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={`hidden shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:flex ${
-              isEffectivelyCollapsed ? "h-5 w-5" : "h-6 w-6"
-            }`}
-          >
-            <SidebarIcon className="h-4 w-4" />
-          </button>
+          {isEffectivelyCollapsed ? (
+            <>
+              <div className="flex w-full items-center justify-between gap-2 border-b border-slate-100 px-1 pb-2">
+                <Link href="/workspaces" title={APP_NAME} className="flex items-center">
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white">
+                    <LayoutIcon className="h-4 w-4" />
+                  </div>
+                </Link>
+                <button
+                  onClick={toggleCollapsed}
+                  aria-label="Expand sidebar"
+                  aria-expanded={false}
+                  title="Expand sidebar"
+                  className="hidden h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:flex"
+                >
+                  <SidebarIcon className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="hidden sm:flex">
+                <NotificationBell />
+              </div>
+            </>
+          ) : (
+            <>
+              <Link href="/workspaces" className="flex min-w-0 items-center gap-2">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white">
+                  <LayoutIcon className="h-4 w-4" />
+                </div>
+                <span className="truncate text-sm font-semibold text-slate-800">{APP_NAME}</span>
+              </Link>
+              <div className="ml-auto hidden items-center sm:flex">
+                <NotificationBell />
+              </div>
+              <button
+                onClick={toggleCollapsed}
+                aria-label="Collapse sidebar"
+                aria-expanded={true}
+                title="Collapse sidebar"
+                className="hidden h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:flex"
+              >
+                <SidebarIcon className="h-4 w-4" />
+              </button>
+            </>
+          )}
           <button
             onClick={() => setIsMobileOpen(false)}
             aria-label="Close navigation"
@@ -355,7 +386,14 @@ export function Sidebar() {
         <div ref={workspaceMenuRef} className="relative border-b border-slate-100 p-2">
           <button
             type="button"
-            onClick={() => setIsWorkspaceMenuOpen((open) => !open)}
+            onClick={() => {
+              if (isEffectivelyCollapsed) {
+                toggleCollapsed();
+                setIsWorkspaceMenuOpen(true);
+                return;
+              }
+              setIsWorkspaceMenuOpen((open) => !open);
+            }}
             aria-expanded={isWorkspaceMenuOpen}
             aria-controls="workspace-switcher-options"
             aria-label={activeWorkspace?.name ?? "Choose workspace"}
@@ -473,14 +511,18 @@ export function Sidebar() {
                     />
                   </button>
                   {isEffectivelyCollapsed ? (
-                    <Link
-                      href={`/workspaces/${ws.id}`}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        toggleCollapsed();
+                        expandWorkspace(ws.id);
+                      }}
                       title={`${ws.name} boards`}
                       aria-label={`${ws.name} boards`}
-                      className="flex h-6 w-6 items-center justify-center rounded-md text-brand-600"
+                      className="flex h-6 w-6 items-center justify-center rounded-md text-brand-600 hover:bg-brand-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
                     >
                       <FolderIcon className="h-4 w-4" />
-                    </Link>
+                    </button>
                   ) : (
                     <span className="min-w-0 flex-1 truncate font-medium">Boards</span>
                   )}

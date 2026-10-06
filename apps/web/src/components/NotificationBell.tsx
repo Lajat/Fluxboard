@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { apiFetch, ApiError } from "@/lib/apiClient";
@@ -22,6 +23,15 @@ export function NotificationBell() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [panelPosition, setPanelPosition] = useState<{
+    left: number;
+    top?: number;
+    bottom?: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
 
   useEffect(() => {
     if (!accessToken) return;
@@ -50,8 +60,46 @@ export function NotificationBell() {
 
   useEffect(() => {
     if (!isOpen) return;
+    function updatePanelPosition() {
+      const anchor = buttonRef.current?.getBoundingClientRect();
+      if (!anchor) return;
+
+      const width = Math.min(320, window.innerWidth - 16);
+      const left = Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8));
+      const availableBelow = window.innerHeight - anchor.bottom - 8;
+      const availableAbove = anchor.top - 8;
+      const maxPanelHeight = Math.min(400, window.innerHeight - 16);
+      const openBelow =
+        availableBelow >= Math.min(240, maxPanelHeight) || availableBelow >= availableAbove;
+      const availableHeight = Math.max(0, Math.min(maxPanelHeight, openBelow ? availableBelow : availableAbove));
+
+      setPanelPosition({
+        left,
+        width,
+        maxHeight: availableHeight,
+        ...(openBelow
+          ? { top: anchor.bottom + 8 }
+          : { bottom: window.innerHeight - anchor.top + 8 }),
+      });
+    }
+
+    updatePanelPosition();
+    window.addEventListener("resize", updatePanelPosition);
+    window.addEventListener("scroll", updatePanelPosition, true);
+    return () => {
+      window.removeEventListener("resize", updatePanelPosition);
+      window.removeEventListener("scroll", updatePanelPosition, true);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
     function handleClickOutside(e: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      if (
+        !containerRef.current?.contains(target) &&
+        !panelRef.current?.contains(target)
+      ) {
         setIsOpen(false);
       }
     }
@@ -89,8 +137,11 @@ export function NotificationBell() {
   return (
     <div ref={containerRef} className="relative">
       <button
+        ref={buttonRef}
         onClick={() => setIsOpen((prev) => !prev)}
         aria-label="Notifications"
+        title="Notifications"
+        aria-expanded={isOpen}
         className="relative rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
       >
         <BellIcon className="h-5 w-5" />
@@ -101,8 +152,20 @@ export function NotificationBell() {
         )}
       </button>
 
-      {isOpen && (
-        <div className="animate-[modal-in_0.15s_ease-out] absolute right-0 top-full z-20 mt-2 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+      {isOpen && panelPosition && typeof document !== "undefined" &&
+        createPortal(
+        <div
+          ref={panelRef}
+          style={{
+            position: "fixed",
+            left: panelPosition.left,
+            top: panelPosition.top,
+            bottom: panelPosition.bottom,
+            width: panelPosition.width,
+            maxHeight: panelPosition.maxHeight,
+          }}
+          className="animate-[modal-in_0.15s_ease-out] z-[100] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg"
+        >
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-2.5">
             <span className="text-sm font-semibold text-slate-800">Notifications</span>
             {unreadCount > 0 && (
@@ -115,7 +178,10 @@ export function NotificationBell() {
             )}
           </div>
 
-          <div className="max-h-80 overflow-y-auto">
+          <div
+            className="max-h-80 overflow-y-auto"
+            style={{ maxHeight: Math.max(0, panelPosition.maxHeight - 48) }}
+          >
             {notifications.length === 0 ? (
               <p className="px-4 py-6 text-center text-sm text-slate-400">
                 No notifications yet.
@@ -141,7 +207,8 @@ export function NotificationBell() {
               ))
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

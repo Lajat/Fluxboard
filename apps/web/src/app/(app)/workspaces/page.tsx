@@ -22,7 +22,6 @@ import {
   ListIcon,
 } from "@/components/ui/icons";
 import { ProfileMenu } from "@/components/ProfileMenu";
-import { NotificationBell } from "@/components/NotificationBell";
 import type { Workspace } from "@fluxboard/shared-types";
 import { SocketEvents, type WorkspaceMembershipPayload, type AccessRevokedPayload } from "@fluxboard/shared-types";
 
@@ -253,7 +252,6 @@ export default function WorkspacesPage() {
               <PlusIcon className="h-4 w-4" />
               New workspace
             </button>
-            <NotificationBell />
             <ProfileMenu />
           </div>
         </div>
