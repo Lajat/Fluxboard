@@ -1,5 +1,22 @@
 import { Schema, model, Document, Types } from "mongoose";
 
+/**
+ * A guest's card-level permissions on ONE specific board, for someone who
+ * is NOT a member of the board's workspace at all — a "single-board
+ * guest" in the same sense Trello uses the term: they can see and work
+ * on exactly this board, nothing else in the workspace (not its name,
+ * not its other boards, not its member list). No board-level
+ * permissions exist for a guest — they can never rename/delete the board
+ * itself or create sibling boards, only add/edit/delete within it,
+ * matching the same delete-requires-add+edit rule as workspace members.
+ */
+export interface BoardGuestEntry {
+  userId: Types.ObjectId;
+  canAddCards: boolean;
+  canEditCards: boolean;
+  canDeleteCards: boolean;
+}
+
 /** Mongoose document shape for a Board. See User.ts for why this differs from the shared-types shape. */
 export interface BoardDocument extends Document {
   workspaceId: Types.ObjectId;
@@ -23,8 +40,19 @@ export interface BoardDocument extends Document {
   // live count, so "BT-3" being deleted should never let a future card
   // reuse that same number.
   cardCounter: number;
+  guestPermissions: BoardGuestEntry[];
   createdAt: Date;
 }
+
+const boardGuestSchema = new Schema<BoardGuestEntry>(
+  {
+    userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    canAddCards: { type: Boolean, default: true },
+    canEditCards: { type: Boolean, default: true },
+    canDeleteCards: { type: Boolean, default: true },
+  },
+  { _id: false }
+);
 
 const boardSchema = new Schema<BoardDocument>({
   workspaceId: { type: Schema.Types.ObjectId, ref: "Workspace", required: true },
@@ -35,6 +63,7 @@ const boardSchema = new Schema<BoardDocument>({
   listOrder: [{ type: Schema.Types.ObjectId, ref: "List" }],
   keyPrefix: { type: String },
   cardCounter: { type: Number, default: 0 },
+  guestPermissions: { type: [boardGuestSchema], default: [] },
   createdAt: { type: Date, default: Date.now },
 });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useRef, useState, FormEvent } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { apiFetch, ApiError } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
@@ -25,6 +25,7 @@ export function CommentSection({ cardId }: CommentSectionProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submitInFlight = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,8 +63,9 @@ export function CommentSection({ cardId }: CommentSectionProps) {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!newBody.trim() || isSubmitting) return;
+    if (!newBody.trim() || submitInFlight.current) return;
 
+    submitInFlight.current = true;
     setIsSubmitting(true);
     try {
       const created = await apiFetch<Comment>(`/cards/${cardId}/comments`, {
@@ -76,6 +78,7 @@ export function CommentSection({ cardId }: CommentSectionProps) {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to add comment");
     } finally {
+      submitInFlight.current = false;
       setIsSubmitting(false);
     }
   }

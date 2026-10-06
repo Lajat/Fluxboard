@@ -14,6 +14,7 @@ import boardRoutes from "./routes/boardRoutes";
 import listRoutes from "./routes/listRoutes";
 import cardRoutes from "./routes/cardRoutes";
 import commentRoutes from "./routes/commentRoutes";
+import notificationRoutes from "./routes/notificationRoutes";
 
 const PORT = process.env.PORT || 4000;
 const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:3000";
@@ -44,6 +45,7 @@ app.use(boardRoutes);
 app.use(listRoutes);
 app.use(cardRoutes);
 app.use(commentRoutes);
+app.use(notificationRoutes);
 
 // Socket.io needs the raw http.Server, not the Express app directly, so it
 // can upgrade HTTP connections to WebSocket connections.

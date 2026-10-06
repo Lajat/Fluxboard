@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveWorkspace } from "@/context/ActiveWorkspaceContext";
+import { NotificationBell } from "@/components/NotificationBell";
 import { apiFetch } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
 import { APP_NAME } from "@/lib/constants";
@@ -13,13 +14,14 @@ import {
   LayoutIcon,
   FolderIcon,
   ChevronDownIcon,
-  ChevronRightIcon,
-  ChevronLeftIcon,
   MenuIcon,
+  SidebarIcon,
   XIcon,
   LogOutIcon,
   PlusIcon,
   SpinnerIcon,
+  SearchIcon,
+  InfoIcon,
 } from "./icons";
 import type { Board, Workspace } from "@fluxboard/shared-types";
 import {
@@ -31,10 +33,9 @@ import {
 const COLLAPSE_STORAGE_KEY = "fluxboard_sidebar_collapsed";
 
 /**
- * Persistent navigation for every authenticated page: lists every
- * workspace the user belongs to, and — expanded on click — the boards
- * inside it, so switching between them never requires the "back to
- * workspaces" round trip the individual pages otherwise need.
+ * Persistent navigation for every authenticated page: a searchable
+ * workspace switcher keeps the full list out of the sidebar, while the
+ * selected workspace's boards remain one click away.
  *
  * Responsive in two different ways depending on screen size:
  *  - Desktop (sm+): a persistent rail, collapsible between a full view
@@ -52,6 +53,9 @@ export function Sidebar() {
 
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [isWorkspaceMenuOpen, setIsWorkspaceMenuOpen] = useState(false);
+  const [workspaceQuery, setWorkspaceQuery] = useState("");
+  const workspaceMenuRef = useRef<HTMLDivElement>(null);
   const [boardsByWorkspace, setBoardsByWorkspace] = useState<Record<string, Board[]>>({});
   const [loadingBoardsFor, setLoadingBoardsFor] = useState<string | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -199,6 +203,31 @@ export function Sidebar() {
     setIsMobileOpen(false);
   }, [pathname]);
 
+  useEffect(() => {
+    setIsWorkspaceMenuOpen(false);
+    setWorkspaceQuery("");
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!isWorkspaceMenuOpen) return;
+
+    function closeOnOutsideClick(event: PointerEvent) {
+      if (event.target instanceof Node && !workspaceMenuRef.current?.contains(event.target)) {
+        setIsWorkspaceMenuOpen(false);
+      }
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setIsWorkspaceMenuOpen(false);
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [isWorkspaceMenuOpen]);
+
   async function loadBoards(workspaceId: string) {
     setLoadingBoardsFor(workspaceId);
     try {
@@ -213,13 +242,17 @@ export function Sidebar() {
     }
   }
 
+  function expandWorkspace(workspaceId: string) {
+    setExpandedId(workspaceId);
+    if (!boardsByWorkspace[workspaceId]) loadBoards(workspaceId);
+  }
+
   function toggleExpand(workspaceId: string) {
     if (expandedId === workspaceId) {
       setExpandedId(null);
       return;
     }
-    setExpandedId(workspaceId);
-    if (!boardsByWorkspace[workspaceId]) loadBoards(workspaceId);
+    expandWorkspace(workspaceId);
   }
 
   function toggleCollapsed() {
@@ -232,7 +265,19 @@ export function Sidebar() {
     });
   }
 
+  function openWorkspaceCreation(e: MouseEvent<HTMLAnchorElement>) {
+    setIsWorkspaceMenuOpen(false);
+    if (pathname === "/workspaces") {
+      e.preventDefault();
+      window.dispatchEvent(new Event("fluxboard:create-workspace"));
+    }
+  }
+
   if (!user) return null;
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
+  const filteredWorkspaces = workspaces.filter((workspace) =>
+    workspace.name.toLocaleLowerCase().includes(workspaceQuery.trim().toLocaleLowerCase())
+  );
 
   return (
     <>
@@ -261,6 +306,9 @@ export function Sidebar() {
           </div>
           <span className="text-sm font-semibold text-slate-800">{APP_NAME}</span>
         </div>
+        <div className="ml-auto flex items-center">
+          <NotificationBell />
+        </div>
       </div>
 
       {isMobileOpen && (
@@ -275,15 +323,57 @@ export function Sidebar() {
           isMobileOpen ? "translate-x-0" : "-translate-x-full"
         } ${isCollapsed ? "sm:w-16" : "sm:w-64"}`}
       >
-        <div className="flex items-center justify-between gap-2 border-b border-slate-100 px-3 py-3">
-          <Link href="/workspaces" className="flex min-w-0 items-center gap-2">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white">
-              <LayoutIcon className="h-4 w-4" />
-            </div>
-            {!isEffectivelyCollapsed && (
-              <span className="truncate text-sm font-semibold text-slate-800">{APP_NAME}</span>
-            )}
-          </Link>
+        <div
+          className={`flex border-b border-slate-100 py-3 ${
+            isEffectivelyCollapsed
+              ? "flex-col items-center gap-2 px-0"
+              : "items-center justify-between gap-2 px-3"
+          }`}
+        >
+          {isEffectivelyCollapsed ? (
+            <>
+              <div className="flex w-full items-center justify-between gap-2 border-b border-slate-100 px-1 pb-2">
+                <Link href="/workspaces" title={APP_NAME} className="flex items-center">
+                  <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white">
+                    <LayoutIcon className="h-4 w-4" />
+                  </div>
+                </Link>
+                <button
+                  onClick={toggleCollapsed}
+                  aria-label="Expand sidebar"
+                  aria-expanded={false}
+                  title="Expand sidebar"
+                  className="hidden h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:flex"
+                >
+                  <SidebarIcon className="h-4 w-4" />
+                </button>
+              </div>
+              <div className="hidden sm:flex">
+                <NotificationBell />
+              </div>
+            </>
+          ) : (
+            <>
+              <Link href="/workspaces" className="flex min-w-0 items-center gap-2">
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white">
+                  <LayoutIcon className="h-4 w-4" />
+                </div>
+                <span className="truncate text-sm font-semibold text-slate-800">{APP_NAME}</span>
+              </Link>
+              <div className="ml-auto hidden items-center sm:flex">
+                <NotificationBell />
+              </div>
+              <button
+                onClick={toggleCollapsed}
+                aria-label="Collapse sidebar"
+                aria-expanded={true}
+                title="Collapse sidebar"
+                className="hidden h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:flex"
+              >
+                <SidebarIcon className="h-4 w-4" />
+              </button>
+            </>
+          )}
           <button
             onClick={() => setIsMobileOpen(false)}
             aria-label="Close navigation"
@@ -293,28 +383,113 @@ export function Sidebar() {
           </button>
         </div>
 
-        {/* Collapse/expand handle: a small floating tab on the sidebar's
-            own edge, vertically centered — not squeezed into the header
-            row alongside the logo. At 64px wide when collapsed, the
-            header row has no room for a second interactive element next
-            to the logo without one sitting on top of the other; a
-            separate edge handle (the same pattern VS Code/Notion/Linear
-            use for their collapsible sidebars) sidesteps the cramping
-            entirely rather than trying to fit both into less space. */}
-        <button
-          onClick={toggleCollapsed}
-          aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="absolute -right-3 top-1/2 z-10 hidden h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 shadow-sm hover:text-slate-600 sm:flex"
-        >
-          {isCollapsed ? (
-            <ChevronRightIcon className="h-3.5 w-3.5" />
-          ) : (
-            <ChevronLeftIcon className="h-3.5 w-3.5" />
+        <div ref={workspaceMenuRef} className="relative border-b border-slate-100 p-2">
+          <button
+            type="button"
+            onClick={() => {
+              if (isEffectivelyCollapsed) {
+                toggleCollapsed();
+                setIsWorkspaceMenuOpen(true);
+                return;
+              }
+              setIsWorkspaceMenuOpen((open) => !open);
+            }}
+            aria-expanded={isWorkspaceMenuOpen}
+            aria-controls="workspace-switcher-options"
+            aria-label={activeWorkspace?.name ?? "Choose workspace"}
+            title={activeWorkspace?.name ?? "Choose workspace"}
+            className={`flex w-full items-center rounded-lg text-left text-sm text-slate-700 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+              isEffectivelyCollapsed ? "justify-center p-1.5" : "gap-2 px-2 py-2"
+            }`}
+          >
+            <div
+              className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold text-white ${
+                activeWorkspace ? avatarColorFor(activeWorkspace.id) : "bg-brand-600"
+              }`}
+            >
+              {activeWorkspace ? initialsFor(activeWorkspace.name) : <FolderIcon className="h-4 w-4" />}
+            </div>
+            {!isEffectivelyCollapsed && (
+              <>
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {activeWorkspace?.name ?? "Workspaces"}
+                </span>
+                <ChevronDownIcon
+                  className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${
+                    isWorkspaceMenuOpen ? "rotate-180" : ""
+                  }`}
+                />
+              </>
+            )}
+          </button>
+
+          {isWorkspaceMenuOpen && (
+            <div className="absolute left-2 right-2 top-full z-50 mt-1 rounded-xl border border-slate-200 bg-white p-2 shadow-xl">
+              <label className="relative block">
+                <SearchIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="search"
+                  value={workspaceQuery}
+                  onChange={(event) => setWorkspaceQuery(event.target.value)}
+                  placeholder="Find a workspace"
+                  aria-label="Find a workspace"
+                  className="w-full rounded-lg border border-slate-200 py-2 pl-8 pr-2 text-xs outline-none focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+                />
+              </label>
+              <div
+                id="workspace-switcher-options"
+                role="listbox"
+                aria-label="Workspaces"
+                className="scrollbar-thin mt-2 max-h-60 overflow-y-auto"
+              >
+                {filteredWorkspaces.map((workspace) => (
+                  <Link
+                    key={workspace.id}
+                    href={`/workspaces/${workspace.id}`}
+                    role="option"
+                    aria-selected={workspace.id === activeWorkspaceId}
+                    onClick={() => setIsWorkspaceMenuOpen(false)}
+                    className={`flex items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-slate-50 ${
+                      workspace.id === activeWorkspaceId ? "bg-brand-50 text-brand-700" : "text-slate-700"
+                    }`}
+                  >
+                    <span
+                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[9px] font-semibold text-white ${avatarColorFor(
+                        workspace.id
+                      )}`}
+                    >
+                      {initialsFor(workspace.name)}
+                    </span>
+                    <span className="truncate">{workspace.name}</span>
+                  </Link>
+                ))}
+                {filteredWorkspaces.length === 0 && (
+                  <p className="px-2 py-3 text-center text-xs text-slate-400">No matching workspaces</p>
+                )}
+              </div>
+              <div className="mt-1 border-t border-slate-100 pt-1">
+                <Link
+                  href="/workspaces?create=1"
+                  onClick={openWorkspaceCreation}
+                  className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium text-brand-600 hover:bg-brand-50"
+                >
+                  <PlusIcon className="h-4 w-4" />
+                  Create workspace
+                </Link>
+                <Link
+                  href="/workspaces"
+                  onClick={() => setIsWorkspaceMenuOpen(false)}
+                  className="block rounded-lg px-2 py-2 text-xs text-slate-500 hover:bg-slate-50"
+                >
+                  View all workspaces
+                </Link>
+              </div>
+            </div>
           )}
-        </button>
+        </div>
 
         <nav className="scrollbar-thin flex-1 overflow-y-auto px-2 py-3">
-          {workspaces.map((ws) => {
+          {workspaces.filter((workspace) => workspace.id === activeWorkspaceId).map((ws) => {
             const isExpanded = expandedId === ws.id;
             const isActive = activeWorkspaceId === ws.id;
             const boards = boardsByWorkspace[ws.id];
@@ -335,32 +510,22 @@ export function Sidebar() {
                       className={`h-3.5 w-3.5 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
                     />
                   </button>
-                  <Link
-                    href={`/workspaces/${ws.id}`}
-                    title={ws.name}
-                    className="flex min-w-0 flex-1 items-center gap-2"
-                  >
-                    {isEffectivelyCollapsed ? (
-                      // Collapsed: every workspace previously rendered as an
-                      // identical plain folder icon — no way to tell them
-                      // apart without hovering each one for its tooltip. A
-                      // colored initial badge (same deterministic
-                      // color-by-id + initials pattern already used for
-                      // user avatars) makes each workspace visually
-                      // distinct at a glance, the way Slack/Notion's
-                      // collapsed workspace switchers do.
-                      <div
-                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold text-white ${avatarColorFor(
-                          ws.id
-                        )}`}
-                      >
-                        {initialsFor(ws.name)}
-                      </div>
-                    ) : (
-                      <FolderIcon className="h-4 w-4 shrink-0" />
-                    )}
-                    {!isEffectivelyCollapsed && <span className="truncate font-medium">{ws.name}</span>}
-                  </Link>
+                  {isEffectivelyCollapsed ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        toggleCollapsed();
+                        expandWorkspace(ws.id);
+                      }}
+                      title={`${ws.name} boards`}
+                      aria-label={`${ws.name} boards`}
+                      className="flex h-6 w-6 items-center justify-center rounded-md text-brand-600 hover:bg-brand-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                    >
+                      <FolderIcon className="h-4 w-4" />
+                    </button>
+                  ) : (
+                    <span className="min-w-0 flex-1 truncate font-medium">Boards</span>
+                  )}
                 </div>
 
                 {isExpanded && !isEffectivelyCollapsed && (
@@ -399,20 +564,34 @@ export function Sidebar() {
             );
           })}
 
-          {!isEffectivelyCollapsed && (
-            <Link
-              href="/workspaces"
-              className="mt-2 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-slate-400 hover:bg-slate-50 hover:text-brand-600"
-            >
-              <PlusIcon className="h-3.5 w-3.5" /> New workspace
-            </Link>
+          {!activeWorkspaceId && pathname === "/workspaces" && !isEffectivelyCollapsed && (
+            <p className="mt-3 rounded-lg px-2 py-3 text-xs leading-relaxed text-slate-500">
+              Choose a workspace above to see its boards, or create one from the workspace menu.
+            </p>
           )}
+
         </nav>
 
-        <div className="border-t border-slate-100 p-2">
+        <div className="space-y-1 border-t border-slate-100 p-2">
+          <Link
+            href="/about"
+            title="About Fluxboard"
+            aria-current={pathname === "/about" ? "page" : undefined}
+            onClick={() => setIsMobileOpen(false)}
+            className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm ${
+              pathname === "/about"
+                ? "bg-brand-50 text-brand-700"
+                : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            }`}
+          >
+            <InfoIcon className="h-4 w-4 shrink-0" />
+            {!isEffectivelyCollapsed && <span className="truncate">About Fluxboard</span>}
+          </Link>
           <button
             onClick={logout}
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            aria-label="Log out"
+            title="Log out"
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-slate-500 hover:bg-slate-50 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             <LogOutIcon className="h-4 w-4 shrink-0" />
             {!isEffectivelyCollapsed && <span className="truncate">Log out</span>}

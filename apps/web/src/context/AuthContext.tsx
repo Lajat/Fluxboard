@@ -125,6 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     setUser(result.user);
     setAccessToken(SESSION_FLAG);
+    setIsLoading(false);
     router.push(getPostAuthRedirect());
   }
 
@@ -135,6 +136,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     setUser(result.user);
     setAccessToken(SESSION_FLAG);
+    setIsLoading(false);
     router.push(getPostAuthRedirect());
   }
 

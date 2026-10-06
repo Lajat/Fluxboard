@@ -28,14 +28,55 @@ export interface Workspace {
   ownerId: string; // User.id of the workspace creator
   memberIds: string[]; // User.id[] of everyone with access
   createdAt: string;
+  /** Lightweight profiles included by the workspace list endpoint for its member-avatar summary. */
+  memberPreview?: WorkspaceMemberPreview[];
+  /**
+   * The CALLING user's own resolved permissions in this workspace —
+   * populated only by GET /workspaces/:id (a list endpoint returning many
+   * workspaces has no obvious single "whose permissions" to compute, so
+   * it's left undefined there). This is what lets an invited member see
+   * their own access level without a separate endpoint — see the "Your
+   * access" UI in the workspace page.
+   */
+  myPermissions?: WorkspacePermissions;
 }
 
-/** What a member is allowed to do within a workspace — see the owner-always-full-access and default-full-access-until-restricted rules in the API's lib/permissions.ts. */
-export interface MemberPermissions {
+export interface WorkspaceMemberPreview {
+  id: string;
+  displayName: string;
+  avatarUrl?: string;
+}
+
+/** Card-level permissions — add/edit/delete lists, cards, and comments. Shared by workspace members and single-board guests alike, since a guest's access is card-level only. */
+export interface CardPermissions {
   canAdd: boolean;
   canEdit: boolean;
   canDelete: boolean;
 }
+
+/**
+ * A workspace member's full permission set — card-level (see
+ * CardPermissions) plus board-level (create/rename/delete boards
+ * themselves). Board-level rights exist ONLY for workspace members —
+ * a single-board guest (BoardGuest, below) never has them, by design.
+ *
+ * Dependency rule enforced both in the permission-settings UI and on the
+ * server (apps/api's updateMemberPermissions): Delete requires Add AND
+ * Edit already granted, on each axis independently — you can't hand
+ * someone delete rights without also giving them the lesser rights that
+ * delete implies.
+ */
+export interface WorkspacePermissions extends CardPermissions {
+  canAddBoards: boolean;
+  canEditBoards: boolean;
+  canDeleteBoards: boolean;
+  canAddCards: boolean;
+  canEditCards: boolean;
+  canDeleteCards: boolean;
+}
+
+/** @deprecated Use CardPermissions (card-level) or WorkspacePermissions (full). Kept only so any code that hasn't migrated yet still compiles. */
+export type MemberPermissions = CardPermissions;
 
 /**
  * A workspace member with enough profile info to render an avatar/name —
@@ -48,7 +89,22 @@ export interface WorkspaceMember {
   displayName: string;
   avatarUrl?: string;
   role: "owner" | "member";
-  permissions: MemberPermissions;
+  permissions: WorkspacePermissions;
+}
+
+/**
+ * A single-board guest — someone with card-level access to exactly ONE
+ * board, who is NOT a member of that board's workspace at all. Modeled
+ * after Trello's guest concept: they see this one board and nothing else
+ * about the workspace (not its name, not its other boards, not its
+ * member list) — see Board.guestPermissions on the API side.
+ */
+export interface BoardGuest {
+  id: string;
+  email: string;
+  displayName: string;
+  avatarUrl?: string;
+  permissions: CardPermissions;
 }
 
 /** A single Kanban board that lives inside a workspace. */
@@ -59,6 +115,16 @@ export interface Board {
   /** Ordered list of List.id — defines left-to-right column order on screen. */
   listOrder: string[];
   createdAt: string;
+  /**
+   * The calling user's own resolved card-level permissions on this
+   * board — populated by GET /boards/:id for both workspace members and
+   * single-board guests, same "see your own access" purpose as
+   * Workspace.myPermissions above. Never includes board-level rights
+   * even for a member, since this is specifically about what you can do
+   * to the board's CONTENTS — check Workspace.myPermissions for whether
+   * you can edit/delete the board itself.
+   */
+  myPermissions?: CardPermissions;
 }
 
 /** A column on a board (e.g. "To Do", "In Progress", "Done"). */
@@ -148,6 +214,7 @@ export const SocketEvents = {
   // the workspace immediately instead of waiting for a failed API request.
   ACCESS_REVOKED: "workspace:access-revoked",
   COMMENT_ADDED: "comment:added",
+  NOTIFICATION_CREATED: "notification:created",
 } as const;
 
 /** Payload shape for the `card:moved` real-time event. */
@@ -181,4 +248,21 @@ export interface MemberPermissionsUpdatedPayload {
 export interface AccessRevokedPayload {
   workspaceId: string;
   workspaceName: string;
+}
+
+/**
+ * A persisted notification — stored so it's still there when a user next
+ * logs in, not just an ephemeral toast that's missed if they were
+ * offline at the time. `link` is where clicking the notification should
+ * navigate to; `type` exists mainly for future icon/grouping purposes,
+ * not for any logic that currently branches on it.
+ */
+export interface Notification {
+  id: string;
+  type: "workspace_invite";
+  title: string;
+  body: string;
+  link: string;
+  isRead: boolean;
+  createdAt: string;
 }

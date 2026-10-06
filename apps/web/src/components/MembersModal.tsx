@@ -1,12 +1,64 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useRef, useState, FormEvent } from "react";
 import { Modal } from "./ui/Modal";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { avatarColorFor, initialsFor } from "@/lib/avatar";
 import { emailError as getEmailError } from "@/lib/validation";
-import { UserPlusIcon, TrashIcon, SpinnerIcon, LinkIcon, CheckIcon, PlusIcon, PencilIcon } from "./ui/icons";
-import type { WorkspaceMember, MemberPermissions } from "@fluxboard/shared-types";
+import { UserPlusIcon, TrashIcon, SpinnerIcon, LinkIcon, CheckIcon } from "./ui/icons";
+import type { WorkspaceMember, WorkspacePermissions } from "@fluxboard/shared-types";
+
+type PermissionAxis = "Boards" | "Cards";
+type PermissionAction = "Add" | "Edit" | "Delete";
+type PermissionField =
+  | "canAddBoards"
+  | "canEditBoards"
+  | "canDeleteBoards"
+  | "canAddCards"
+  | "canEditCards"
+  | "canDeleteCards";
+type WorkspacePermissionFlags = Pick<WorkspacePermissions, PermissionField>;
+type PermissionPreset = "Viewer" | "Contributor" | "Full access";
+
+const permissionFields: Record<PermissionAxis, Record<PermissionAction, PermissionField>> = {
+  Boards: {
+    Add: "canAddBoards",
+    Edit: "canEditBoards",
+    Delete: "canDeleteBoards",
+  },
+  Cards: {
+    Add: "canAddCards",
+    Edit: "canEditCards",
+    Delete: "canDeleteCards",
+  },
+};
+
+const permissionPresets: Record<PermissionPreset, WorkspacePermissionFlags> = {
+  Viewer: {
+    canAddBoards: false,
+    canEditBoards: false,
+    canDeleteBoards: false,
+    canAddCards: false,
+    canEditCards: false,
+    canDeleteCards: false,
+  },
+  Contributor: {
+    canAddBoards: false,
+    canEditBoards: false,
+    canDeleteBoards: false,
+    canAddCards: true,
+    canEditCards: true,
+    canDeleteCards: false,
+  },
+  "Full access": {
+    canAddBoards: true,
+    canEditBoards: true,
+    canDeleteBoards: true,
+    canAddCards: true,
+    canEditCards: true,
+    canDeleteCards: true,
+  },
+};
 
 interface MembersModalProps {
   open: boolean;
@@ -17,8 +69,8 @@ interface MembersModalProps {
   currentUserId: string;
   onInvite: (email: string) => Promise<void>;
   onRemove: (member: WorkspaceMember) => Promise<void>;
-  /** Flips one of a member's canAdd/canEdit/canDelete flags — owner-only, called from the toggle chips below each non-owner member. */
-  onUpdatePermissions: (member: WorkspaceMember, updates: Partial<MemberPermissions>) => Promise<void>;
+  /** Updates a member's board-management and board-content permissions. */
+  onUpdatePermissions: (member: WorkspaceMember, updates: Partial<WorkspacePermissions>) => Promise<void>;
   /** Full shareable URL (e.g. "https://app.com/invite/abc123"), or null while it's still loading/not yet fetched. Owner-only feature — parent only needs to fetch this when isOwner is true. */
   inviteLink: string | null;
   isLoadingInviteLink: boolean;
@@ -51,6 +103,7 @@ export function MembersModal({
   const [touched, setTouched] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [isInviting, setIsInviting] = useState(false);
+  const inviteInFlight = useRef(false);
   const [removingMember, setRemovingMember] = useState<WorkspaceMember | null>(null);
   const [confirmingRegenerate, setConfirmingRegenerate] = useState(false);
   const [justCopied, setJustCopied] = useState(false);
@@ -60,10 +113,12 @@ export function MembersModal({
 
   async function handleInvite(e: FormEvent) {
     e.preventDefault();
+    if (inviteInFlight.current) return;
     setTouched(true);
     setInviteError(null);
     if (validationError) return;
 
+    inviteInFlight.current = true;
     setIsInviting(true);
     try {
       await onInvite(email.trim());
@@ -72,6 +127,7 @@ export function MembersModal({
     } catch (err) {
       setInviteError(err instanceof Error ? err.message : "Failed to send invite.");
     } finally {
+      inviteInFlight.current = false;
       setIsInviting(false);
     }
   }
@@ -89,19 +145,55 @@ export function MembersModal({
     }
   }
 
-  async function handleTogglePermission(member: WorkspaceMember, field: keyof MemberPermissions) {
-    const key = `${member.id}-${field}`;
+  /** Keep the delete dependency valid client-side; the API independently enforces it too. */
+  async function handleTogglePermission(
+    member: WorkspaceMember,
+    axis: "Boards" | "Cards",
+    action: PermissionAction,
+    enabled: boolean
+  ) {
+    const fullField = permissionFields[axis][action];
+    const updates: Partial<WorkspacePermissions> = { [fullField]: enabled };
+
+    if (!enabled && action !== "Delete") {
+      const deleteField = permissionFields[axis].Delete;
+      if (member.permissions[deleteField]) {
+        updates[deleteField] = false;
+      }
+    }
+
+    const key = `${member.id}-${fullField}`;
     setSavingPermissionKey(key);
     try {
-      await onUpdatePermissions(member, { [field]: !member.permissions[field] });
+      await onUpdatePermissions(member, updates);
     } finally {
       setSavingPermissionKey(null);
     }
   }
 
+  async function handleApplyPreset(member: WorkspaceMember, preset: PermissionPreset) {
+    const key = `${member.id}-preset`;
+    setSavingPermissionKey(key);
+    try {
+      await onUpdatePermissions(member, permissionPresets[preset]);
+    } finally {
+      setSavingPermissionKey(null);
+    }
+  }
+
+  function getActivePreset(member: WorkspaceMember): PermissionPreset | null {
+    return (
+      (Object.keys(permissionPresets) as PermissionPreset[]).find((preset) =>
+        (Object.keys(permissionPresets[preset]) as PermissionField[]).every(
+          (field) => member.permissions[field] === permissionPresets[preset][field]
+        )
+      ) ?? null
+    );
+  }
+
   return (
     <>
-      <Modal open={open} onClose={onClose} title={`${workspaceName} · Members`} widthClassName="max-w-md">
+      <Modal open={open} onClose={onClose} title={`${workspaceName} · Members`} widthClassName="max-w-lg">
         {isOwner && (
           <div className="mb-5 space-y-4">
             <div>
@@ -214,44 +306,101 @@ export function MembersModal({
                 )}
               </div>
 
-              {/* Per-member permission toggles — owner-only, and not shown
-                  for the owner's own row since the owner always has full
-                  access by definition (see lib/permissions.ts). Each chip
-                  is independently clickable and reflects its live state,
-                  so the owner can see at a glance what a member can and
-                  can't do without opening a separate settings screen. */}
+              {/* Workspace owners can set permissions for non-owner members. */}
               {isOwner && member.role !== "owner" && (
-                <div className="ml-12 mt-1.5 flex gap-1.5">
-                  {(
-                    [
-                      { field: "canAdd" as const, label: "Add", icon: PlusIcon },
-                      { field: "canEdit" as const, label: "Edit", icon: PencilIcon },
-                      { field: "canDelete" as const, label: "Delete", icon: TrashIcon },
-                    ]
-                  ).map(({ field, label, icon: Icon }) => {
-                    const isOn = member.permissions[field];
-                    const isSaving = savingPermissionKey === `${member.id}-${field}`;
-                    return (
-                      <button
-                        key={field}
-                        onClick={() => handleTogglePermission(member, field)}
-                        disabled={isSaving}
-                        title={`${isOn ? "Revoke" : "Grant"} ${label.toLowerCase()} permission`}
-                        className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition disabled:opacity-50 ${
-                          isOn
-                            ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                            : "bg-slate-100 text-slate-400 hover:bg-slate-200"
-                        }`}
-                      >
-                        {isSaving ? (
-                          <SpinnerIcon className="h-3 w-3" />
-                        ) : (
-                          <Icon className="h-3 w-3" />
-                        )}
-                        {label}
-                      </button>
-                    );
-                  })}
+                <div className="ml-12 mt-3 space-y-3">
+                  <fieldset disabled={savingPermissionKey !== null}>
+                    <legend className="mb-1.5 flex w-full items-center justify-between text-xs font-semibold text-slate-600">
+                      Access preset
+                      <span className="font-normal text-slate-500">
+                        {getActivePreset(member) ?? "Custom"}
+                      </span>
+                    </legend>
+                    <div className="grid grid-cols-3 gap-1.5" role="group" aria-label={`${member.displayName} access preset`}>
+                      {(["Viewer", "Contributor", "Full access"] as const).map((preset) => {
+                        const isActive = getActivePreset(member) === preset;
+                        return (
+                          <button
+                            key={preset}
+                            type="button"
+                            aria-pressed={isActive}
+                            onClick={() => handleApplyPreset(member, preset)}
+                            className={`rounded-lg border px-2 py-2 text-left text-xs font-medium transition focus:outline-none focus:ring-2 focus:ring-brand-300 ${
+                              isActive
+                                ? "border-brand-300 bg-brand-50 text-brand-700"
+                                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+                            }`}
+                          >
+                            <span className="block">{preset}</span>
+                            <span className="mt-0.5 block text-[10px] font-normal leading-tight text-slate-500">
+                              {preset === "Viewer" && "View only"}
+                              {preset === "Contributor" && "Work with board content"}
+                              {preset === "Full access" && "Manage everything"}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </fieldset>
+
+                  <div className="overflow-hidden rounded-lg border border-slate-200">
+                    <table className="w-full table-fixed text-left text-xs">
+                      <caption className="sr-only">
+                        Permissions for {member.displayName}
+                      </caption>
+                      <thead className="bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th scope="col" className="w-[40%] px-3 py-2">Area</th>
+                          {(["Add", "Edit", "Delete"] as const).map((action) => (
+                            <th key={action} scope="col" className="px-2 py-2 text-center">{action}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {(["Boards", "Cards"] as const).map((axis) => (
+                          <tr key={axis}>
+                            <th scope="row" className="px-3 py-2.5 text-left font-medium text-slate-700">
+                              <span className="block">{axis === "Boards" ? "Boards" : "Board content"}</span>
+                              <span className="mt-0.5 block text-[10px] font-normal leading-tight text-slate-500">
+                                {axis === "Boards" ? "Create, rename, and remove boards" : "Lists, cards, and comments"}
+                              </span>
+                            </th>
+                            {(["Add", "Edit", "Delete"] as const).map((action) => {
+                              const field = permissionFields[axis][action];
+                              const checked = member.permissions[field];
+                              const canDeleteBeEnabled =
+                                member.permissions[permissionFields[axis].Add] &&
+                                member.permissions[permissionFields[axis].Edit];
+                              const deleteBlocked = action === "Delete" && !checked && !canDeleteBeEnabled;
+                              const isSaving = savingPermissionKey !== null;
+                              return (
+                                <td key={field} className="px-2 py-2.5 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    disabled={isSaving || deleteBlocked}
+                                    aria-label={`${action} ${axis === "Boards" ? "boards" : "board content"} for ${member.displayName}`}
+                                    title={deleteBlocked ? "Requires Add and Edit to be enabled" : undefined}
+                                    onChange={(event) => handleTogglePermission(member, axis, action, event.target.checked)}
+                                    className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
+                                  />
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <p className="text-[11px] leading-relaxed text-slate-500">
+                    Workspace members can view its boards. These settings control changes; deleting requires both Add and Edit.
+                    {savingPermissionKey?.startsWith(`${member.id}-`) && (
+                      <span className="ml-1 inline-flex items-center gap-1 text-slate-600">
+                        <SpinnerIcon className="h-3 w-3" /> Saving
+                      </span>
+                    )}
+                  </p>
                 </div>
               )}
             </li>

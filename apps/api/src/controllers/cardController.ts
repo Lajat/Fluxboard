@@ -5,7 +5,7 @@ import { ListModel } from "../models/List";
 import { BoardModel } from "../models/Board";
 import type { Card } from "@fluxboard/shared-types";
 import { SocketEvents } from "@fluxboard/shared-types";
-import { getMemberPermissions, isWorkspaceMember, loadWorkspaceForList } from "../lib/permissions";
+import { resolveListAccess } from "../lib/permissions";
 import { generateKeyPrefix } from "../lib/taskId";
 
 /**
@@ -49,6 +49,30 @@ function toCardResponse(doc: any): Card {
   };
 }
 
+const boardMoveQueues = new Map<string, Promise<void>>();
+
+// List order is stored across separate documents, so overlapping moves on
+// the same board must not interleave their multi-document updates.
+async function serializeBoardMoves<T>(boardId: string, move: () => Promise<T>): Promise<T> {
+  const previous = boardMoveQueues.get(boardId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const queued = previous.then(() => current);
+  boardMoveQueues.set(boardId, queued);
+
+  await previous;
+  try {
+    return await move();
+  } finally {
+    release();
+    if (boardMoveQueues.get(boardId) === queued) {
+      boardMoveQueues.delete(boardId);
+    }
+  }
+}
+
 /**
  * POST /lists/:listId/cards
  * Creates a new card at the end of the given list's cardOrder. The caller
@@ -72,12 +96,11 @@ export async function createCard(req: Request, res: Response) {
     return res.status(404).json({ error: "list not found" });
   }
 
-  const workspace = await loadWorkspaceForList(listId);
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveListAccess(listId, req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "list not found" });
   }
-  if (!permissions.canAdd) {
+  if (!access.cardPermissions.canAdd) {
     return res.status(403).json({ error: "you don't have permission to add cards to this board" });
   }
 
@@ -130,24 +153,38 @@ export async function createCard(req: Request, res: Response) {
 
 /**
  * GET /lists/:listId/cards
- * Returns all cards in a list, in cardOrder (not insertion order).
+ * Returns all cards in a list, in cardOrder (not insertion order). Cards
+ * missing from cardOrder are appended based on their persisted listId so
+ * an incomplete order array never makes existing cards disappear.
  * Requires plain membership — previously this had no check at all either.
  */
 export async function listCardsForList(req: Request, res: Response) {
   const { listId } = req.params;
 
-  const workspace = await loadWorkspaceForList(listId);
-  if (!workspace || !isWorkspaceMember(workspace, req.userId!)) {
+  const access = await resolveListAccess(listId, req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "list not found" });
   }
 
-  const list = await ListModel.findById(listId).populate("cardOrder");
+  const list = await ListModel.findById(listId);
   if (!list) {
     return res.status(404).json({ error: "list not found" });
   }
 
-  const cards = (list.cardOrder as any[]).map(toCardResponse);
-  res.json({ items: cards });
+  const cards = await CardModel.find({ listId });
+  const cardsById = new Map(cards.map((card) => [card._id.toString(), card]));
+  const orderedIds = list.cardOrder.map((id) => id.toString());
+  const orderedCards = [];
+  const orderedIdSet = new Set<string>();
+  for (const id of orderedIds) {
+    const card = cardsById.get(id);
+    if (card && !orderedIdSet.has(id)) {
+      orderedCards.push(card);
+      orderedIdSet.add(id);
+    }
+  }
+  orderedCards.push(...cards.filter((card) => !orderedIdSet.has(card._id.toString())));
+  res.json({ items: orderedCards.map(toCardResponse) });
 }
 
 /**
@@ -171,12 +208,11 @@ export async function updateCard(req: Request, res: Response) {
     return res.status(404).json({ error: "card not found" });
   }
 
-  const workspace = await loadWorkspaceForList(existingCard.listId.toString());
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveListAccess(existingCard.listId.toString(), req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "card not found" });
   }
-  if (!permissions.canEdit) {
+  if (!access.cardPermissions.canEdit) {
     return res.status(403).json({ error: "you don't have permission to edit this card" });
   }
 
@@ -225,12 +261,11 @@ export async function deleteCard(req: Request, res: Response) {
     return res.status(404).json({ error: "card not found" });
   }
 
-  const workspace = await loadWorkspaceForList(existingCard.listId.toString());
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveListAccess(existingCard.listId.toString(), req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "card not found" });
   }
-  if (!permissions.canDelete) {
+  if (!access.cardPermissions.canDelete) {
     return res.status(403).json({ error: "you don't have permission to delete this card" });
   }
 
@@ -271,89 +306,99 @@ export async function moveCard(req: Request, res: Response) {
     return res.status(400).json({ error: "toListId and newIndex are required" });
   }
 
-  const card = await CardModel.findById(cardId);
-  if (!card) {
+  const initialCard = await CardModel.findById(cardId);
+  if (!initialCard) {
     return res.status(404).json({ error: "card not found" });
   }
 
-  const fromListId = card.listId.toString();
-
-  const workspace = await loadWorkspaceForList(fromListId);
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
-    return res.status(404).json({ error: "card not found" });
-  }
-  if (!permissions.canEdit) {
-    return res.status(403).json({ error: "you don't have permission to move this card" });
+  const initialList = await ListModel.findById(initialCard.listId);
+  if (!initialList) {
+    return res.status(404).json({ error: "list not found" });
   }
 
-  const sourceList = await ListModel.findById(fromListId);
-  const destinationList = await ListModel.findById(toListId);
-  if (!destinationList) {
-    return res.status(404).json({ error: "destination list not found" });
-  }
+  return serializeBoardMoves(initialList.boardId.toString(), async () => {
+    const card = await CardModel.findById(cardId);
+    if (!card) {
+      return res.status(404).json({ error: "card not found" });
+    }
 
-  // A card can only move between lists on the SAME board — the frontend
-  // never offers a way to drag a card onto a different board's list, and
-  // without this check a crafted request could move a card into a board
-  // (even a different workspace's board) the destination list happens to
-  // belong to, effectively exfiltrating it out of its original workspace.
-  if (!sourceList || sourceList.boardId.toString() !== destinationList.boardId.toString()) {
-    return res.status(400).json({ error: "a card can only move between lists on the same board" });
-  }
+    const fromListId = card.listId.toString();
 
-  // Remove every existing occurrence, then insert one copy in the destination
-  // within the same update pipeline so overlapping moves cannot duplicate it.
-  const cardObjectId = new Types.ObjectId(cardId);
-  const destinationObjectId = new Types.ObjectId(toListId);
-  await ListModel.updateMany(
-    { boardId: destinationList.boardId },
-    [
-      {
-        $set: {
-          cardOrder: {
-            $let: {
-              vars: {
-                remaining: {
-                  $filter: {
-                    input: "$cardOrder",
-                    as: "cardId",
-                    cond: { $ne: ["$$cardId", cardObjectId] },
+    const access = await resolveListAccess(fromListId, req.userId!);
+    if (!access) {
+      return res.status(404).json({ error: "card not found" });
+    }
+    if (!access.cardPermissions.canEdit) {
+      return res.status(403).json({ error: "you don't have permission to move this card" });
+    }
+
+    const sourceList = await ListModel.findById(fromListId);
+    const destinationList = await ListModel.findById(toListId);
+    if (!destinationList) {
+      return res.status(404).json({ error: "destination list not found" });
+    }
+
+    // A card can only move between lists on the SAME board — the frontend
+    // never offers a way to drag a card onto a different board's list, and
+    // without this check a crafted request could move a card into a board
+    // (even a different workspace's board) the destination list happens to
+    // belong to, effectively exfiltrating it out of its original workspace.
+    if (!sourceList || sourceList.boardId.toString() !== destinationList.boardId.toString()) {
+      return res.status(400).json({ error: "a card can only move between lists on the same board" });
+    }
+
+    // Remove every existing occurrence, then insert one copy in the destination.
+    const cardObjectId = new Types.ObjectId(cardId);
+    const destinationObjectId = new Types.ObjectId(toListId);
+    await ListModel.updateMany(
+      { boardId: destinationList.boardId },
+      [
+        {
+          $set: {
+            cardOrder: {
+              $let: {
+                vars: {
+                  remaining: {
+                    $filter: {
+                      input: "$cardOrder",
+                      as: "cardId",
+                      cond: { $ne: ["$$cardId", cardObjectId] },
+                    },
                   },
                 },
-              },
-              in: {
-                $cond: [
-                  { $eq: ["$_id", destinationObjectId] },
-                  {
-                    $concatArrays: [
-                      newIndex === 0 ? [] : { $slice: ["$$remaining", 0, newIndex] },
-                      [cardObjectId],
-                      { $slice: ["$$remaining", newIndex] },
-                    ],
-                  },
-                  "$$remaining",
-                ],
+                in: {
+                  $cond: [
+                    { $eq: ["$_id", destinationObjectId] },
+                    {
+                      $concatArrays: [
+                        newIndex === 0 ? [] : { $slice: ["$$remaining", 0, newIndex] },
+                        [cardObjectId],
+                        { $slice: ["$$remaining", newIndex] },
+                      ],
+                    },
+                    "$$remaining",
+                  ],
+                },
               },
             },
           },
         },
-      },
-    ]
-  );
+      ]
+    );
 
-  // Update the card's own listId to match — cardOrder arrays are the
-  // source of truth for ordering, but listId is what every other query
-  // (e.g. listCardsForList) filters by, so both must stay in sync.
-  const updatedCard = await CardModel.findByIdAndUpdate(cardId, { listId: toListId }, { new: true });
+    // Update the card's own listId to match — cardOrder arrays are the
+    // source of truth for ordering, but listId is what every other query
+    // (e.g. listCardsForList) filters by, so both must stay in sync.
+    const updatedCard = await CardModel.findByIdAndUpdate(cardId, { listId: toListId }, { new: true });
 
-  req.app.get("io").to(`board:${destinationList.boardId}`).emit(SocketEvents.CARD_MOVED, {
-    cardId: card._id.toString(),
-    fromListId,
-    toListId,
-    newIndex,
-    movedBy: req.userId,
+    req.app.get("io").to(`board:${destinationList.boardId}`).emit(SocketEvents.CARD_MOVED, {
+      cardId: card._id.toString(),
+      fromListId,
+      toListId,
+      newIndex,
+      movedBy: req.userId,
+    });
+
+    res.json(toCardResponse(updatedCard));
   });
-
-  res.json(toCardResponse(updatedCard));
 }

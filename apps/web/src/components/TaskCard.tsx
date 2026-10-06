@@ -1,6 +1,7 @@
 "use client";
 
 import { forwardRef, type CSSProperties, type HTMLAttributes, type SyntheticEvent } from "react";
+import { useDndContext } from "@dnd-kit/core";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { Card, LabelColor, WorkspaceMember } from "@fluxboard/shared-types";
@@ -91,6 +92,9 @@ export const TaskCardView = forwardRef<HTMLDivElement, TaskCardViewProps>(functi
           {card.labels.map((color) => (
             <span
               key={color}
+              role="img"
+              aria-label={`${color} label`}
+              title={`${color[0].toUpperCase()}${color.slice(1)} label`}
               className={`h-2 w-8 rounded-full ${LABEL_SWATCH[color as LabelColor] ?? "bg-slate-300"}`}
             />
           ))}
@@ -197,6 +201,12 @@ export function TaskCard({ card, onDelete, onOpen, members = [], canDelete = tru
     id: card.id,
     disabled: isMovePending,
   });
+  const { active, over } = useDndContext();
+  const activeRect = active?.rect.current.translated;
+  const isDropTarget = over?.id === card.id && active?.id !== card.id && !!activeRect;
+  const insertBefore = isDropTarget && activeRect
+    ? activeRect.top + activeRect.height / 2 < over.rect.top + over.rect.height / 2
+    : false;
 
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -213,6 +223,13 @@ export function TaskCard({ card, onDelete, onOpen, members = [], canDelete = tru
       canDelete={canDelete}
       onDelete={onDelete}
       onOpen={onOpen}
+      className={
+        isDropTarget
+          ? insertBefore
+            ? "before:pointer-events-none before:absolute before:-top-1.5 before:left-2 before:right-2 before:z-10 before:h-1 before:rounded-full before:bg-brand-500 before:shadow-[0_0_0_2px_white] before:content-['']"
+            : "after:pointer-events-none after:absolute after:-bottom-1.5 after:left-2 after:right-2 after:z-10 after:h-1 after:rounded-full after:bg-brand-500 after:shadow-[0_0_0_2px_white] after:content-['']"
+          : ""
+      }
       {...attributes}
       {...listeners}
     />

@@ -3,10 +3,12 @@ import { BoardModel } from "../models/Board";
 import { WorkspaceModel } from "../models/Workspace";
 import { ListModel } from "../models/List";
 import { CardModel } from "../models/Card";
+import { UserModel } from "../models/User";
 import type { Board } from "@fluxboard/shared-types";
 import { SocketEvents } from "@fluxboard/shared-types";
-import { getMemberPermissions, isWorkspaceMember } from "../lib/permissions";
+import { getMemberPermissions, isWorkspaceMember, resolveBoardAccess } from "../lib/permissions";
 import { generateKeyPrefix } from "../lib/taskId";
+import { notifyUser } from "../lib/notify";
 
 /** Converts a Mongoose BoardDocument into the shared `Board` shape. */
 function toBoardResponse(doc: any): Board {
@@ -45,7 +47,7 @@ export async function createBoard(req: Request, res: Response) {
   if (!permissions) {
     return res.status(404).json({ error: "workspace not found" });
   }
-  if (!permissions.canAdd) {
+  if (!permissions.canAddBoards) {
     return res.status(403).json({ error: "you don't have permission to create boards in this workspace" });
   }
 
@@ -81,7 +83,11 @@ export async function listBoardsForWorkspace(req: Request, res: Response) {
 
 /**
  * GET /boards/:boardId
- * Returns a single board, if the user belongs to its workspace.
+ * Returns a single board — if the user belongs to its workspace, OR is a
+ * single-board guest with explicit access to this exact board (see
+ * Board.guestPermissions). A guest reaching this endpoint is the normal
+ * case, not an edge case: it's how they view the one board they were
+ * invited to.
  */
 export async function getBoard(req: Request, res: Response) {
   const { boardId } = req.params;
@@ -91,12 +97,12 @@ export async function getBoard(req: Request, res: Response) {
     return res.status(404).json({ error: "board not found" });
   }
 
-  const workspace = await WorkspaceModel.findById(board.workspaceId);
-  if (!workspace || !isWorkspaceMember(workspace, req.userId!)) {
+  const access = await resolveBoardAccess(board, req.userId!);
+  if (!access) {
     return res.status(404).json({ error: "board not found" });
   }
 
-  res.json(toBoardResponse(board));
+  res.json({ ...toBoardResponse(board), myPermissions: access.cardPermissions });
 }
 
 /**
@@ -119,12 +125,15 @@ export async function updateBoard(req: Request, res: Response) {
     return res.status(404).json({ error: "board not found" });
   }
 
-  const workspace = await WorkspaceModel.findById(board.workspaceId);
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveBoardAccess(board, req.userId!);
+  // A board-only guest never has board-level rights at all, by design —
+  // they can work inside a board's lists/cards but never rename/delete
+  // the board itself, so scope !== "workspace" is a 404 here the same as
+  // no access at all, not a 403 (this endpoint doesn't exist for them).
+  if (!access || access.scope !== "workspace") {
     return res.status(404).json({ error: "board not found" });
   }
-  if (!permissions.canEdit) {
+  if (!access.boardPermissions.canEditBoards) {
     return res.status(403).json({ error: "you don't have permission to edit this board" });
   }
 
@@ -155,12 +164,11 @@ export async function deleteBoard(req: Request, res: Response) {
     return res.status(404).json({ error: "board not found" });
   }
 
-  const workspace = await WorkspaceModel.findById(board.workspaceId);
-  const permissions = workspace ? getMemberPermissions(workspace, req.userId!) : null;
-  if (!permissions) {
+  const access = await resolveBoardAccess(board, req.userId!);
+  if (!access || access.scope !== "workspace") {
     return res.status(404).json({ error: "board not found" });
   }
-  if (!permissions.canDelete) {
+  if (!access.boardPermissions.canDeleteBoards) {
     return res.status(403).json({ error: "you don't have permission to delete this board" });
   }
 
@@ -182,4 +190,190 @@ export async function deleteBoard(req: Request, res: Response) {
     .emit(SocketEvents.BOARD_DELETED, boardResponse);
 
   res.json({ deleted: boardResponse });
+}
+
+/** Converts a guestPermissions entry + its looked-up User into the shared `BoardGuest` shape. */
+function toBoardGuestResponse(user: any, entry: any): any {
+  return {
+    id: user._id.toString(),
+    email: user.email,
+    displayName: user.displayName,
+    avatarUrl: user.avatarUrl,
+    permissions: {
+      canAdd: entry.canAddCards,
+      canEdit: entry.canEditCards,
+      canDelete: entry.canDeleteCards,
+    },
+  };
+}
+
+/**
+ * GET /boards/:boardId/guests
+ * Lists everyone with single-board guest access to this board (not
+ * workspace members — see listMembers in workspaceController for that).
+ * Workspace-member-only, same visibility reasoning as the rest of this
+ * controller's management endpoints.
+ */
+export async function listBoardGuests(req: Request, res: Response) {
+  const { boardId } = req.params;
+
+  const board = await BoardModel.findById(boardId);
+  if (!board) {
+    return res.status(404).json({ error: "board not found" });
+  }
+
+  const access = await resolveBoardAccess(board, req.userId!);
+  if (!access || access.scope !== "workspace") {
+    return res.status(404).json({ error: "board not found" });
+  }
+
+  const userIds = board.guestPermissions.map((g) => g.userId);
+  const users = await UserModel.find({ _id: { $in: userIds } });
+  const usersById = new Map(users.map((u) => [u._id.toString(), u]));
+
+  const guests = board.guestPermissions
+    .map((entry) => {
+      const user = usersById.get(entry.userId.toString());
+      return user ? toBoardGuestResponse(user, entry) : null;
+    })
+    .filter(Boolean);
+
+  res.json({ items: guests });
+}
+
+/**
+ * POST /boards/:boardId/guests
+ * Grants someone single-board access — NOT workspace membership, the
+ * Trello-style guest concept described on BoardGuestEntry (Board.ts):
+ * they'll be able to see and work on exactly this board, nothing else in
+ * the workspace. Owner-only, same authorization level as inviting a
+ * workspace member (addMember) — granting any new person access to
+ * anything is treated as an owner-level decision throughout this app,
+ * not something any member can do.
+ *
+ * If the target email belongs to an existing workspace member, this is
+ * rejected — board-guest access would be strictly weaker than what they
+ * already have as a member, so it can only be a mistake, not a
+ * meaningful request.
+ */
+export async function addBoardGuest(req: Request, res: Response) {
+  const { boardId } = req.params;
+  const { email, canAdd = true, canEdit = true, canDelete = true } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ error: "email is required" });
+  }
+  if (canDelete && !(canAdd && canEdit)) {
+    return res.status(400).json({ error: "canDelete requires canAdd and canEdit to also be true" });
+  }
+
+  const board = await BoardModel.findById(boardId);
+  if (!board) {
+    return res.status(404).json({ error: "board not found" });
+  }
+
+  const workspace = await WorkspaceModel.findById(board.workspaceId);
+  if (!workspace) {
+    return res.status(404).json({ error: "board not found" });
+  }
+  if (workspace.ownerId.toString() !== req.userId) {
+    return res.status(403).json({ error: "only the workspace owner can invite a guest to a board" });
+  }
+
+  const userToAdd = await UserModel.findOne({ email: email.toLowerCase() });
+  if (!userToAdd) {
+    return res.status(404).json({ error: "no user found with that email" });
+  }
+
+  if (isWorkspaceMember(workspace, userToAdd._id.toString())) {
+    return res.status(400).json({ error: "this person is already a workspace member, which already includes access to this board" });
+  }
+
+  const existingIndex = board.guestPermissions.findIndex((g) => g.userId.toString() === userToAdd._id.toString());
+  const entry = { userId: userToAdd._id, canAddCards: !!canAdd, canEditCards: !!canEdit, canDeleteCards: !!canDelete };
+  if (existingIndex >= 0) {
+    board.guestPermissions[existingIndex] = entry;
+  } else {
+    board.guestPermissions.push(entry);
+  }
+  await board.save();
+
+  await notifyUser(req.app.get("io"), userToAdd._id.toString(), {
+    type: "workspace_invite",
+    title: "You were given access to a board",
+    body: `You now have access to "${board.title}".`,
+    link: `/boards/${boardId}`,
+  });
+
+  res.status(201).json(toBoardGuestResponse(userToAdd, entry));
+}
+
+/**
+ * PATCH /boards/:boardId/guests/:userId
+ * Updates an existing guest's card-level permissions on this board.
+ * Owner-only, same dependency rule as every other permission-setting
+ * endpoint in the app.
+ */
+export async function updateBoardGuestPermissions(req: Request, res: Response) {
+  const { boardId, userId } = req.params;
+  const { canAdd, canEdit, canDelete } = req.body;
+
+  const board = await BoardModel.findById(boardId);
+  if (!board) {
+    return res.status(404).json({ error: "board not found" });
+  }
+
+  const workspace = await WorkspaceModel.findById(board.workspaceId);
+  if (!workspace || workspace.ownerId.toString() !== req.userId) {
+    return res.status(403).json({ error: "only the workspace owner can change a guest's permissions" });
+  }
+
+  const entry = board.guestPermissions.find((g) => g.userId.toString() === userId);
+  if (!entry) {
+    return res.status(404).json({ error: "that person is not a guest on this board" });
+  }
+
+  if (canAdd !== undefined) entry.canAddCards = !!canAdd;
+  if (canEdit !== undefined) entry.canEditCards = !!canEdit;
+  if (canDelete !== undefined) entry.canDeleteCards = !!canDelete;
+
+  if (entry.canDeleteCards && !(entry.canAddCards && entry.canEditCards)) {
+    return res.status(400).json({ error: "canDelete requires canAdd and canEdit to also be true" });
+  }
+
+  await board.save();
+
+  const user = await UserModel.findById(userId);
+  res.json(toBoardGuestResponse(user, entry));
+}
+
+/**
+ * DELETE /boards/:boardId/guests/:userId
+ * Revokes a guest's access to this board entirely. Owner-only.
+ */
+export async function removeBoardGuest(req: Request, res: Response) {
+  const { boardId, userId } = req.params;
+
+  const board = await BoardModel.findById(boardId);
+  if (!board) {
+    return res.status(404).json({ error: "board not found" });
+  }
+
+  const workspace = await WorkspaceModel.findById(board.workspaceId);
+  if (!workspace || workspace.ownerId.toString() !== req.userId) {
+    return res.status(403).json({ error: "only the workspace owner can remove a guest" });
+  }
+
+  board.guestPermissions = board.guestPermissions.filter((g) => g.userId.toString() !== userId);
+  await board.save();
+
+  // Mirrors ACCESS_REVOKED for workspace members — sent to the removed
+  // guest's own room so their client can immediately back out of this
+  // board rather than finding out only when their next request 404s.
+  req.app.get("io").to(`user:${userId}`).emit(SocketEvents.ACCESS_REVOKED, {
+    workspaceId: board.workspaceId.toString(),
+    workspaceName: board.title, // a guest never knew the workspace's name in the first place — this is the closest equivalent they'll recognize
+  });
+
+  res.json({ removed: userId });
 }
