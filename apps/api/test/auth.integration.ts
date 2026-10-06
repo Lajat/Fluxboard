@@ -32,6 +32,10 @@ async function run() {
     body: JSON.stringify({ email: testEmail, password: testPassword, displayName: "Test User" }),
   });
   assert.strictEqual(res.status, 201, "expected 201 on signup");
+  assert.match(
+    res.headers.get("set-cookie") || "",
+    /refreshToken=[^;]*; Path=\/api-proxy\/auth\/refresh/i
+  );
   extractCookies(res);
   const signupBody = await res.json();
   assert.ok(signupBody.user, "signup should return a user object");
