@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { avatarColorFor, initialsFor } from "@/lib/avatar";
 import { LogOutIcon, ChevronDownIcon } from "./ui/icons";
-import { APP_NAME, APP_VERSION } from "@/lib/constants";
 
 /**
  * The avatar-triggered account menu shown on the workspaces page (and
@@ -21,6 +20,8 @@ export function ProfileMenu() {
   const { user, logout } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuId = useId();
 
   // Close on an outside click or Escape — standard dropdown behavior;
   // without this it'd only close by clicking the trigger again, which
@@ -34,7 +35,10 @@ export function ProfileMenu() {
       }
     }
     function handleEscape(e: KeyboardEvent) {
-      if (e.key === "Escape") setIsOpen(false);
+      if (e.key === "Escape") {
+        setIsOpen(false);
+        triggerRef.current?.focus();
+      }
     }
 
     document.addEventListener("mousedown", handleClickOutside);
@@ -50,10 +54,12 @@ export function ProfileMenu() {
   return (
     <div ref={containerRef} className="relative">
       <button
+        ref={triggerRef}
         onClick={() => setIsOpen((prev) => !prev)}
-        aria-label="Account menu"
+        aria-label={`Account menu for ${user.displayName}`}
         aria-expanded={isOpen}
-        className="flex items-center gap-2 rounded-full py-1 pl-1 pr-2 transition hover:bg-slate-100"
+        aria-controls={menuId}
+        className="flex items-center gap-2 rounded-full py-1 pl-1 pr-2 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
       >
         <div
           className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white ${avatarColorFor(
@@ -68,7 +74,11 @@ export function ProfileMenu() {
       </button>
 
       {isOpen && (
-        <div className="animate-[modal-in_0.15s_ease-out] absolute right-0 top-full z-20 mt-2 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+        <div
+          id={menuId}
+          aria-label="Account"
+          className="animate-[modal-in_0.15s_ease-out] absolute right-0 top-full z-20 mt-2 w-64 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg"
+        >
           <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-3">
             <div
               className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold text-white ${avatarColorFor(
@@ -88,15 +98,11 @@ export function ProfileMenu() {
               setIsOpen(false);
               logout();
             }}
-            className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+            className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-slate-700 transition hover:bg-slate-50 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-500"
           >
             <LogOutIcon className="h-4 w-4" />
             Log out
           </button>
-
-          <div className="border-t border-slate-100 px-4 py-2.5 text-center text-[11px] text-slate-300">
-            {APP_NAME} v{APP_VERSION} &middot; &copy; {new Date().getFullYear()}
-          </div>
         </div>
       )}
     </div>

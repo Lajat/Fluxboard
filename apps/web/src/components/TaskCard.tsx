@@ -92,6 +92,9 @@ export const TaskCardView = forwardRef<HTMLDivElement, TaskCardViewProps>(functi
           {card.labels.map((color) => (
             <span
               key={color}
+              role="img"
+              aria-label={`${color} label`}
+              title={`${color[0].toUpperCase()}${color.slice(1)} label`}
               className={`h-2 w-8 rounded-full ${LABEL_SWATCH[color as LabelColor] ?? "bg-slate-300"}`}
             />
           ))}

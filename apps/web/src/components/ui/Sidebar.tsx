@@ -20,6 +20,7 @@ import {
   PlusIcon,
   SpinnerIcon,
   SearchIcon,
+  InfoIcon,
 } from "./icons";
 import type { Board, Workspace } from "@fluxboard/shared-types";
 import {
@@ -316,10 +317,10 @@ export function Sidebar() {
       >
         <div
           className={`flex items-center justify-between border-b border-slate-100 py-3 ${
-            isEffectivelyCollapsed ? "gap-0 px-1.5" : "gap-2 px-3"
+            isEffectivelyCollapsed ? "gap-2 px-1" : "gap-2 px-3"
           }`}
         >
-          <Link href="/workspaces" className="flex min-w-0 items-center gap-2">
+          <Link href="/workspaces" title={isEffectivelyCollapsed ? APP_NAME : undefined} className="flex min-w-0 items-center gap-2">
             <div
               className={`flex shrink-0 items-center justify-center rounded-lg bg-brand-600 text-white ${
                 isEffectivelyCollapsed ? "h-6 w-6" : "h-8 w-8"
@@ -336,7 +337,9 @@ export function Sidebar() {
             aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
             aria-expanded={!isCollapsed}
             title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="hidden h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:flex"
+            className={`hidden shrink-0 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 sm:flex ${
+              isEffectivelyCollapsed ? "h-5 w-5" : "h-6 w-6"
+            }`}
           >
             <SidebarIcon className="h-4 w-4" />
           </button>
@@ -366,7 +369,7 @@ export function Sidebar() {
                 activeWorkspace ? avatarColorFor(activeWorkspace.id) : "bg-brand-600"
               }`}
             >
-              {activeWorkspace ? initialsFor(activeWorkspace.name) : <LayoutIcon className="h-4 w-4" />}
+              {activeWorkspace ? initialsFor(activeWorkspace.name) : <FolderIcon className="h-4 w-4" />}
             </div>
             {!isEffectivelyCollapsed && (
               <>
@@ -519,12 +522,34 @@ export function Sidebar() {
             );
           })}
 
+          {!activeWorkspaceId && pathname === "/workspaces" && !isEffectivelyCollapsed && (
+            <p className="mt-3 rounded-lg px-2 py-3 text-xs leading-relaxed text-slate-500">
+              Choose a workspace above to see its boards, or create one from the workspace menu.
+            </p>
+          )}
+
         </nav>
 
-        <div className="border-t border-slate-100 p-2">
+        <div className="space-y-1 border-t border-slate-100 p-2">
+          <Link
+            href="/about"
+            title="About Fluxboard"
+            aria-current={pathname === "/about" ? "page" : undefined}
+            onClick={() => setIsMobileOpen(false)}
+            className={`flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm ${
+              pathname === "/about"
+                ? "bg-brand-50 text-brand-700"
+                : "text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            }`}
+          >
+            <InfoIcon className="h-4 w-4 shrink-0" />
+            {!isEffectivelyCollapsed && <span className="truncate">About Fluxboard</span>}
+          </Link>
           <button
             onClick={logout}
-            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-slate-500 hover:bg-slate-50 hover:text-slate-800"
+            aria-label="Log out"
+            title="Log out"
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm text-slate-500 hover:bg-slate-50 hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
           >
             <LogOutIcon className="h-4 w-4 shrink-0" />
             {!isEffectivelyCollapsed && <span className="truncate">Log out</span>}

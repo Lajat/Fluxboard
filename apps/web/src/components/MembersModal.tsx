@@ -5,8 +5,60 @@ import { Modal } from "./ui/Modal";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { avatarColorFor, initialsFor } from "@/lib/avatar";
 import { emailError as getEmailError } from "@/lib/validation";
-import { UserPlusIcon, TrashIcon, SpinnerIcon, LinkIcon, CheckIcon, PlusIcon, PencilIcon } from "./ui/icons";
+import { UserPlusIcon, TrashIcon, SpinnerIcon, LinkIcon, CheckIcon } from "./ui/icons";
 import type { WorkspaceMember, WorkspacePermissions } from "@fluxboard/shared-types";
+
+type PermissionAxis = "Boards" | "Cards";
+type PermissionAction = "Add" | "Edit" | "Delete";
+type PermissionField =
+  | "canAddBoards"
+  | "canEditBoards"
+  | "canDeleteBoards"
+  | "canAddCards"
+  | "canEditCards"
+  | "canDeleteCards";
+type WorkspacePermissionFlags = Pick<WorkspacePermissions, PermissionField>;
+type PermissionPreset = "Viewer" | "Contributor" | "Full access";
+
+const permissionFields: Record<PermissionAxis, Record<PermissionAction, PermissionField>> = {
+  Boards: {
+    Add: "canAddBoards",
+    Edit: "canEditBoards",
+    Delete: "canDeleteBoards",
+  },
+  Cards: {
+    Add: "canAddCards",
+    Edit: "canEditCards",
+    Delete: "canDeleteCards",
+  },
+};
+
+const permissionPresets: Record<PermissionPreset, WorkspacePermissionFlags> = {
+  Viewer: {
+    canAddBoards: false,
+    canEditBoards: false,
+    canDeleteBoards: false,
+    canAddCards: false,
+    canEditCards: false,
+    canDeleteCards: false,
+  },
+  Contributor: {
+    canAddBoards: false,
+    canEditBoards: false,
+    canDeleteBoards: false,
+    canAddCards: true,
+    canEditCards: true,
+    canDeleteCards: false,
+  },
+  "Full access": {
+    canAddBoards: true,
+    canEditBoards: true,
+    canDeleteBoards: true,
+    canAddCards: true,
+    canEditCards: true,
+    canDeleteCards: true,
+  },
+};
 
 interface MembersModalProps {
   open: boolean;
@@ -17,7 +69,7 @@ interface MembersModalProps {
   currentUserId: string;
   onInvite: (email: string) => Promise<void>;
   onRemove: (member: WorkspaceMember) => Promise<void>;
-  /** Flips one of a member's six permission flags (board-level + card-level) — owner-only, called from the checkbox grid below each non-owner member. */
+  /** Updates a member's board-management and board-content permissions. */
   onUpdatePermissions: (member: WorkspaceMember, updates: Partial<WorkspacePermissions>) => Promise<void>;
   /** Full shareable URL (e.g. "https://app.com/invite/abc123"), or null while it's still loading/not yet fetched. Owner-only feature — parent only needs to fetch this when isOwner is true. */
   inviteLink: string | null;
@@ -93,29 +145,18 @@ export function MembersModal({
     }
   }
 
-  /**
-   * Toggles one checkbox, applying the delete-requires-add+edit rule on
-   * the client before the request even goes out (the server enforces the
-   * same rule independently — see updateMemberPermissions — this is purely
-   * so the UI doesn't have to show a rejected-request error for something
-   * that's easy to prevent the user from doing in the first place).
-   *
-   * The cascade: turning OFF Add or Edit while Delete is currently on
-   * also turns Delete off, in the SAME request — not left for a second
-   * click, since a lone "Add off, Delete still on" state would be
-   * rejected by the server anyway.
-   */
+  /** Keep the delete dependency valid client-side; the API independently enforces it too. */
   async function handleTogglePermission(
     member: WorkspaceMember,
     axis: "Boards" | "Cards",
-    field: "canAdd" | "canEdit" | "canDelete"
+    action: PermissionAction,
+    enabled: boolean
   ) {
-    const fullField = `${field}${axis}` as keyof WorkspacePermissions;
-    const next = !member.permissions[fullField];
-    const updates: Partial<WorkspacePermissions> = { [fullField]: next } as any;
+    const fullField = permissionFields[axis][action];
+    const updates: Partial<WorkspacePermissions> = { [fullField]: enabled };
 
-    if (!next && field !== "canDelete") {
-      const deleteField = `canDelete${axis}` as keyof WorkspacePermissions;
+    if (!enabled && action !== "Delete") {
+      const deleteField = permissionFields[axis].Delete;
       if (member.permissions[deleteField]) {
         updates[deleteField] = false;
       }
@@ -130,9 +171,29 @@ export function MembersModal({
     }
   }
 
+  async function handleApplyPreset(member: WorkspaceMember, preset: PermissionPreset) {
+    const key = `${member.id}-preset`;
+    setSavingPermissionKey(key);
+    try {
+      await onUpdatePermissions(member, permissionPresets[preset]);
+    } finally {
+      setSavingPermissionKey(null);
+    }
+  }
+
+  function getActivePreset(member: WorkspaceMember): PermissionPreset | null {
+    return (
+      (Object.keys(permissionPresets) as PermissionPreset[]).find((preset) =>
+        (Object.keys(permissionPresets[preset]) as PermissionField[]).every(
+          (field) => member.permissions[field] === permissionPresets[preset][field]
+        )
+      ) ?? null
+    );
+  }
+
   return (
     <>
-      <Modal open={open} onClose={onClose} title={`${workspaceName} · Members`} widthClassName="max-w-md">
+      <Modal open={open} onClose={onClose} title={`${workspaceName} · Members`} widthClassName="max-w-lg">
         {isOwner && (
           <div className="mb-5 space-y-4">
             <div>
@@ -245,69 +306,101 @@ export function MembersModal({
                 )}
               </div>
 
-              {/* Per-member permission grid — owner-only, and not shown for
-                  the owner's own row since the owner always has full access
-                  by definition (see lib/permissions.ts). Two independent
-                  axes (Boards / Cards — see WorkspacePermissions in
-                  shared-types), each with Add/Edit/Delete. Delete is
-                  disabled (not just unchecked) until both Add and Edit are
-                  already on for that same axis — the dependency rule the
-                  server also enforces independently; disabling it here is
-                  just so the owner never sees a rejected request for
-                  something preventable in the UI itself. */}
+              {/* Workspace owners can set permissions for non-owner members. */}
               {isOwner && member.role !== "owner" && (
-                <div className="ml-12 mt-1.5 space-y-1">
-                  {(["Boards", "Cards"] as const).map((axis) => {
-                    const addField = `canAdd${axis}` as const;
-                    const editField = `canEdit${axis}` as const;
-                    const deleteField = `canDelete${axis}` as const;
-                    const canDeleteBeEnabled = member.permissions[addField] && member.permissions[editField];
+                <div className="ml-12 mt-3 space-y-3">
+                  <fieldset disabled={savingPermissionKey !== null}>
+                    <legend className="mb-1.5 flex w-full items-center justify-between text-xs font-semibold text-slate-600">
+                      Access preset
+                      <span className="font-normal text-slate-500">
+                        {getActivePreset(member) ?? "Custom"}
+                      </span>
+                    </legend>
+                    <div className="grid grid-cols-3 gap-1.5" role="group" aria-label={`${member.displayName} access preset`}>
+                      {(["Viewer", "Contributor", "Full access"] as const).map((preset) => {
+                        const isActive = getActivePreset(member) === preset;
+                        return (
+                          <button
+                            key={preset}
+                            type="button"
+                            aria-pressed={isActive}
+                            onClick={() => handleApplyPreset(member, preset)}
+                            className={`rounded-lg border px-2 py-2 text-left text-xs font-medium transition focus:outline-none focus:ring-2 focus:ring-brand-300 ${
+                              isActive
+                                ? "border-brand-300 bg-brand-50 text-brand-700"
+                                : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:bg-slate-50"
+                            }`}
+                          >
+                            <span className="block">{preset}</span>
+                            <span className="mt-0.5 block text-[10px] font-normal leading-tight text-slate-500">
+                              {preset === "Viewer" && "View only"}
+                              {preset === "Contributor" && "Work with board content"}
+                              {preset === "Full access" && "Manage everything"}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </fieldset>
 
-                    return (
-                      <div key={axis} className="flex items-center gap-1.5">
-                        <span className="w-12 shrink-0 text-[10px] font-medium uppercase tracking-wide text-slate-300">
-                          {axis}
-                        </span>
-                        {(
-                          [
-                            { field: "canAdd" as const, fullField: addField, label: "Add", icon: PlusIcon },
-                            { field: "canEdit" as const, fullField: editField, label: "Edit", icon: PencilIcon },
-                            { field: "canDelete" as const, fullField: deleteField, label: "Delete", icon: TrashIcon },
-                          ]
-                        ).map(({ field, fullField, label, icon: Icon }) => {
-                          const isOn = member.permissions[fullField];
-                          const isDisabled =
-                            savingPermissionKey === `${member.id}-${fullField}` ||
-                            (field === "canDelete" && !isOn && !canDeleteBeEnabled);
-                          const isSaving = savingPermissionKey === `${member.id}-${fullField}`;
-                          return (
-                            <button
-                              key={fullField}
-                              onClick={() => handleTogglePermission(member, axis, field)}
-                              disabled={isDisabled}
-                              title={
-                                field === "canDelete" && !isOn && !canDeleteBeEnabled
-                                  ? `Requires Add and Edit to be on for ${axis}`
-                                  : `${isOn ? "Revoke" : "Grant"} ${label.toLowerCase()} permission for ${axis.toLowerCase()}`
-                              }
-                              className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${
-                                isOn
-                                  ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                                  : "bg-slate-100 text-slate-400 hover:bg-slate-200"
-                              }`}
-                            >
-                              {isSaving ? (
-                                <SpinnerIcon className="h-3 w-3" />
-                              ) : (
-                                <Icon className="h-3 w-3" />
-                              )}
-                              {label}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    );
-                  })}
+                  <div className="overflow-hidden rounded-lg border border-slate-200">
+                    <table className="w-full table-fixed text-left text-xs">
+                      <caption className="sr-only">
+                        Permissions for {member.displayName}
+                      </caption>
+                      <thead className="bg-slate-50 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th scope="col" className="w-[40%] px-3 py-2">Area</th>
+                          {(["Add", "Edit", "Delete"] as const).map((action) => (
+                            <th key={action} scope="col" className="px-2 py-2 text-center">{action}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {(["Boards", "Cards"] as const).map((axis) => (
+                          <tr key={axis}>
+                            <th scope="row" className="px-3 py-2.5 text-left font-medium text-slate-700">
+                              <span className="block">{axis === "Boards" ? "Boards" : "Board content"}</span>
+                              <span className="mt-0.5 block text-[10px] font-normal leading-tight text-slate-500">
+                                {axis === "Boards" ? "Create, rename, and remove boards" : "Lists, cards, and comments"}
+                              </span>
+                            </th>
+                            {(["Add", "Edit", "Delete"] as const).map((action) => {
+                              const field = permissionFields[axis][action];
+                              const checked = member.permissions[field];
+                              const canDeleteBeEnabled =
+                                member.permissions[permissionFields[axis].Add] &&
+                                member.permissions[permissionFields[axis].Edit];
+                              const deleteBlocked = action === "Delete" && !checked && !canDeleteBeEnabled;
+                              const isSaving = savingPermissionKey !== null;
+                              return (
+                                <td key={field} className="px-2 py-2.5 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    disabled={isSaving || deleteBlocked}
+                                    aria-label={`${action} ${axis === "Boards" ? "boards" : "board content"} for ${member.displayName}`}
+                                    title={deleteBlocked ? "Requires Add and Edit to be enabled" : undefined}
+                                    onChange={(event) => handleTogglePermission(member, axis, action, event.target.checked)}
+                                    className="h-4 w-4 cursor-pointer rounded border-slate-300 accent-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
+                                  />
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <p className="text-[11px] leading-relaxed text-slate-500">
+                    Workspace members can view its boards. These settings control changes; deleting requires both Add and Edit.
+                    {savingPermissionKey?.startsWith(`${member.id}-`) && (
+                      <span className="ml-1 inline-flex items-center gap-1 text-slate-600">
+                        <SpinnerIcon className="h-3 w-3" /> Saving
+                      </span>
+                    )}
+                  </p>
                 </div>
               )}
             </li>

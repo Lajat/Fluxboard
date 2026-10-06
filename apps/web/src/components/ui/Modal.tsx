@@ -8,6 +8,9 @@ interface ModalProps {
   open: boolean;
   onClose: () => void;
   title?: string;
+  ariaLabel?: string;
+  header?: ReactNode;
+  footer?: ReactNode;
   children: ReactNode;
   /** Max width class for the panel — defaults to a comfortable dialog size. */
   widthClassName?: string;
@@ -18,7 +21,16 @@ interface ModalProps {
  * on backdrop click or Escape. Rendered via a portal so it always sits on
  * top of everything regardless of where in the tree it's opened from.
  */
-export function Modal({ open, onClose, title, children, widthClassName = "max-w-lg" }: ModalProps) {
+export function Modal({
+  open,
+  onClose,
+  title,
+  ariaLabel,
+  header,
+  footer,
+  children,
+  widthClassName = "max-w-lg",
+}: ModalProps) {
   const titleId = useId();
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -50,23 +62,32 @@ export function Modal({ open, onClose, title, children, widthClassName = "max-w-
       <div
         role="dialog"
         aria-modal="true"
-        aria-labelledby={title ? titleId : undefined}
+        aria-labelledby={title && !header ? titleId : undefined}
+        aria-label={header ? ariaLabel : undefined}
         onClick={(e) => e.stopPropagation()}
-        className={`scrollbar-thin max-h-[90vh] w-full ${widthClassName} overflow-y-auto rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 animate-[modal-in_0.15s_ease-out]`}
+        className={`flex max-h-[90vh] w-full ${widthClassName} flex-col overflow-hidden rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 animate-[modal-in_0.15s_ease-out]`}
       >
-        {title && (
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-            <h2 id={titleId} className="text-base font-semibold text-slate-900">{title}</h2>
-            <button
-              onClick={onClose}
-              aria-label="Close"
-              className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-            >
-              <XIcon className="h-5 w-5" />
-            </button>
+        {header ??
+          (title && (
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-4">
+              <h2 id={titleId} className="text-base font-semibold text-slate-900">
+                {title}
+              </h2>
+              <button
+                onClick={onClose}
+                aria-label="Close"
+                className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+              >
+                <XIcon className="h-5 w-5" />
+              </button>
+            </div>
+          ))}
+        <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto p-5">{children}</div>
+        {footer && (
+          <div className="z-10 shrink-0 border-t border-slate-200 bg-white px-5 py-4 shadow-[0_-4px_12px_rgba(15,23,42,0.04)]">
+            {footer}
           </div>
         )}
-        <div className="p-5">{children}</div>
       </div>
     </div>,
     document.body
