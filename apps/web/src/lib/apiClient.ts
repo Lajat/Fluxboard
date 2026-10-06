@@ -78,11 +78,12 @@ export async function apiFetch<T = unknown>(
 
   // A 401 usually just means the access token expired (they're
   // deliberately short-lived, 15 minutes) — attempt exactly one silent
-  // refresh-and-retry before giving up. Skipped for the auth endpoints
-  // themselves so a failed login attempt doesn't trigger a pointless
-  // refresh call, and skipped on the retry itself to guarantee this can
-  // only ever recurse one level deep.
-  if (res.status === 401 && !isRetryAfterRefresh && !path.startsWith("/auth/")) {
+  // refresh-and-retry before giving up. Auth endpoints are skipped except
+  // /auth/me, which is also used to restore an existing session on page load.
+  // A failed login attempt should not trigger a pointless refresh call, and
+  // the retry itself is skipped to guarantee this can only recurse once.
+  const canRefresh = !path.startsWith("/auth/") || path === "/auth/me";
+  if (res.status === 401 && !isRetryAfterRefresh && canRefresh) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       return apiFetch<T>(path, options, true);
