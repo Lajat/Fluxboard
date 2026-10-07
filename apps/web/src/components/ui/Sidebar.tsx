@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveWorkspace } from "@/context/ActiveWorkspaceContext";
 import { NotificationBell } from "@/components/NotificationBell";
+import { ProfileMenu } from "@/components/ProfileMenu";
 import { apiFetch } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
 import { APP_NAME } from "@/lib/constants";
@@ -292,11 +293,11 @@ export function Sidebar() {
           use for their mobile web headers — means there's only one
           element in that region, so nothing can overlap it, on every
           page, since this is rendered once here rather than per-page. */}
-      <div className="fixed inset-x-0 top-0 z-30 flex items-center gap-3 border-b border-slate-200 bg-white px-3 py-2.5 shadow-sm sm:hidden">
+      <div className="fixed inset-x-0 top-0 z-30 flex items-center gap-3 border-b border-slate-200 bg-white px-3 py-2 shadow-sm sm:hidden">
         <button
           onClick={() => setIsMobileOpen(true)}
           aria-label="Open navigation"
-          className="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100"
+          className="rounded-lg p-3 text-slate-600 hover:bg-slate-100"
         >
           <MenuIcon className="h-5 w-5" />
         </button>
@@ -306,8 +307,9 @@ export function Sidebar() {
           </div>
           <span className="text-sm font-semibold text-slate-800">{APP_NAME}</span>
         </div>
-        <div className="ml-auto flex items-center">
+        <div className="ml-auto flex items-center gap-2">
           <NotificationBell />
+          <ProfileMenu />
         </div>
       </div>
 

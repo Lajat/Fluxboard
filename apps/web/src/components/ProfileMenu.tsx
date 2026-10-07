@@ -59,7 +59,7 @@ export function ProfileMenu() {
         aria-label={`Account menu for ${user.displayName}`}
         aria-expanded={isOpen}
         aria-controls={menuId}
-        className="flex items-center gap-2 rounded-full py-1 pl-1 pr-2 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
+        className="flex min-h-11 items-center gap-2 rounded-full py-1 pl-1 pr-2 transition hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
       >
         <div
           className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold text-white ${avatarColorFor(

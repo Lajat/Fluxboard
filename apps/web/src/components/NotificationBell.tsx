@@ -65,7 +65,10 @@ export function NotificationBell() {
       if (!anchor) return;
 
       const width = Math.min(320, window.innerWidth - 16);
-      const left = Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8));
+      const left =
+        window.innerWidth < 640
+          ? window.innerWidth - width - 8
+          : Math.max(8, Math.min(anchor.right - width, window.innerWidth - width - 8));
       const availableBelow = window.innerHeight - anchor.bottom - 8;
       const availableAbove = anchor.top - 8;
       const maxPanelHeight = Math.min(400, window.innerHeight - 16);
@@ -142,7 +145,7 @@ export function NotificationBell() {
         aria-label="Notifications"
         title="Notifications"
         aria-expanded={isOpen}
-        className="relative rounded-full p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+        className="relative rounded-full p-3 text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
       >
         <BellIcon className="h-5 w-5" />
         {unreadCount > 0 && (
