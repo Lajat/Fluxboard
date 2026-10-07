@@ -7,6 +7,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useActiveWorkspace } from "@/context/ActiveWorkspaceContext";
 import { useToast } from "@/components/ui/Toast";
 import { apiFetch, ApiError } from "@/lib/apiClient";
+import { publishSidebarSync } from "@/lib/sidebarSync";
 import { getSocket } from "@/lib/socket";
 import { EditableTitle } from "@/components/ui/EditableTitle";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -240,6 +241,7 @@ export default function WorkspaceBoardsPage() {
         body: { title: newBoardTitle },
       });
       setBoards((prev) => (prev.some((b) => b.id === created.id) ? prev : [...prev, created]));
+      publishSidebarSync({ type: "board-upserted", board: created });
       setNewBoardTitle("");
       setIsCreating(false);
       setCreateError(null);
@@ -266,6 +268,7 @@ export default function WorkspaceBoardsPage() {
         body: { title },
       });
       setBoards((prev) => prev.map((b) => (b.id === boardId ? updated : b)));
+      publishSidebarSync({ type: "board-upserted", board: updated });
     } catch (err) {
       showToast(err instanceof ApiError ? err.message : "Failed to rename board", "error");
     }
@@ -276,6 +279,7 @@ export default function WorkspaceBoardsPage() {
     try {
       await apiFetch(`/boards/${deletingBoard.id}`, { method: "DELETE", accessToken });
       setBoards((prev) => prev.filter((b) => b.id !== deletingBoard.id));
+      publishSidebarSync({ type: "board-deleted", board: deletingBoard });
       showToast("Board deleted");
     } catch (err) {
       showToast(err instanceof ApiError ? err.message : "Failed to delete board", "error");

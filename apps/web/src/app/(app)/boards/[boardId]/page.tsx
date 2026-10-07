@@ -20,6 +20,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useActiveWorkspace } from "@/context/ActiveWorkspaceContext";
 import { useToast } from "@/components/ui/Toast";
 import { apiFetch, ApiError } from "@/lib/apiClient";
+import { publishSidebarSync } from "@/lib/sidebarSync";
 import { getSocket } from "@/lib/socket";
 import { BoardColumn } from "@/components/BoardColumn";
 import { TaskCardView } from "@/components/TaskCard";
@@ -493,6 +494,7 @@ export default function BoardPage() {
         body: { title: nextTitle },
       });
       setBoard(updated);
+      publishSidebarSync({ type: "board-upserted", board: updated });
     } catch (err) {
       showToast(err instanceof ApiError ? err.message : "Failed to rename board", "error");
     }
@@ -501,6 +503,7 @@ export default function BoardPage() {
   async function handleDeleteBoard() {
     try {
       await apiFetch(`/boards/${boardId}`, { method: "DELETE", accessToken });
+      if (board) publishSidebarSync({ type: "board-deleted", board });
       showToast("Board deleted");
       router.push(board ? `/workspaces/${board.workspaceId}` : "/workspaces");
     } catch (err) {

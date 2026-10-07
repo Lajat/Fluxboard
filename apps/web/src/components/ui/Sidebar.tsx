@@ -9,6 +9,7 @@ import { NotificationBell } from "@/components/NotificationBell";
 import { ProfileMenu } from "@/components/ProfileMenu";
 import { apiFetch } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
+import { SIDEBAR_SYNC_EVENT, type SidebarSyncDetail } from "@/lib/sidebarSync";
 import { APP_NAME } from "@/lib/constants";
 import { avatarColorFor, initialsFor } from "@/lib/avatar";
 import {
@@ -138,6 +139,10 @@ export function Sidebar() {
       });
     }
 
+    function handleWorkspaceUpdated(workspace: Workspace) {
+      setWorkspaces((prev) => prev.map((ws) => (ws.id === workspace.id ? workspace : ws)));
+    }
+
     // Without this, a new board only ever shows up in whichever tab
     // created it, and only after that tab's own HTTP response — the
     // sidebar's boardsByWorkspace map is separate local state, so it
@@ -169,17 +174,73 @@ export function Sidebar() {
       });
     }
 
+    function handleBoardUpdated(board: Board) {
+      setBoardsByWorkspace((prev) => {
+        if (!prev[board.workspaceId]) return prev;
+        return {
+          ...prev,
+          [board.workspaceId]: prev[board.workspaceId].map((current) =>
+            current.id === board.id ? board : current
+          ),
+        };
+      });
+    }
+
+    function handleSidebarSync(event: Event) {
+      const { detail } = event as CustomEvent<SidebarSyncDetail>;
+      switch (detail.type) {
+        case "workspace-upserted":
+          deletedWorkspaceIds.current.delete(detail.workspace.id);
+          setWorkspaces((prev) =>
+            prev.some((workspace) => workspace.id === detail.workspace.id)
+              ? prev.map((workspace) => (workspace.id === detail.workspace.id ? detail.workspace : workspace))
+              : [...prev, detail.workspace]
+          );
+          break;
+        case "workspace-deleted":
+          deletedWorkspaceIds.current.add(detail.workspaceId);
+          setWorkspaces((prev) => prev.filter((workspace) => workspace.id !== detail.workspaceId));
+          setBoardsByWorkspace((prev) => {
+            const next = { ...prev };
+            delete next[detail.workspaceId];
+            return next;
+          });
+          break;
+        case "board-upserted":
+          setBoardsByWorkspace((prev) => {
+            const boards = prev[detail.board.workspaceId];
+            if (!boards) return prev;
+            return {
+              ...prev,
+              [detail.board.workspaceId]: boards.some((board) => board.id === detail.board.id)
+                ? boards.map((board) => (board.id === detail.board.id ? detail.board : board))
+                : [...boards, detail.board],
+            };
+          });
+          break;
+        case "board-deleted":
+          handleBoardDeleted(detail.board);
+          break;
+      }
+    }
+
     socket.on(SocketEvents.MEMBER_ADDED, handleMemberAdded);
     socket.on(SocketEvents.ACCESS_REVOKED, handleAccessRevoked);
     socket.on(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
+    socket.on(SocketEvents.WORKSPACE_UPDATED, handleWorkspaceUpdated);
     socket.on(SocketEvents.BOARD_CREATED, handleBoardCreated);
+    socket.on(SocketEvents.BOARD_UPDATED, handleBoardUpdated);
     socket.on(SocketEvents.BOARD_DELETED, handleBoardDeleted);
+    window.addEventListener(SIDEBAR_SYNC_EVENT, handleSidebarSync);
     return () => {
       socket.off(SocketEvents.MEMBER_ADDED, handleMemberAdded);
       socket.off(SocketEvents.ACCESS_REVOKED, handleAccessRevoked);
       socket.off(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
+      socket.off(SocketEvents.WORKSPACE_UPDATED, handleWorkspaceUpdated);
       socket.off(SocketEvents.BOARD_CREATED, handleBoardCreated);
+      socket.off(SocketEvents.BOARD_UPDATED, handleBoardUpdated);
       socket.off(SocketEvents.BOARD_DELETED, handleBoardDeleted);
+      window.removeEventListener(SIDEBAR_SYNC_EVENT, handleSidebarSync);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
