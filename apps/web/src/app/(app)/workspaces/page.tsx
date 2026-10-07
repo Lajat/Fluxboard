@@ -7,6 +7,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useActiveWorkspace } from "@/context/ActiveWorkspaceContext";
 import { useToast } from "@/components/ui/Toast";
 import { apiFetch, ApiError } from "@/lib/apiClient";
+import { publishSidebarSync } from "@/lib/sidebarSync";
 import { getSocket } from "@/lib/socket";
 import { EditableTitle } from "@/components/ui/EditableTitle";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -178,6 +179,7 @@ export default function WorkspacesPage() {
         body: { name: newWorkspaceName },
       });
       upsertWorkspace(created);
+      publishSidebarSync({ type: "workspace-upserted", workspace: created });
       setNewWorkspaceName("");
       setIsCreating(false);
       setCreateError(null);
@@ -197,6 +199,7 @@ export default function WorkspacesPage() {
         body: { name },
       });
       setWorkspaces((prev) => prev.map((ws) => (ws.id === workspaceId ? updated : ws)));
+      publishSidebarSync({ type: "workspace-upserted", workspace: updated });
     } catch (err) {
       showToast(err instanceof ApiError ? err.message : "Failed to rename workspace", "error");
     }
@@ -208,6 +211,7 @@ export default function WorkspacesPage() {
       await apiFetch(`/workspaces/${deletingWorkspace.id}`, { method: "DELETE", accessToken });
       deletedWorkspaceIds.current.add(deletingWorkspace.id);
       setWorkspaces((prev) => prev.filter((ws) => ws.id !== deletingWorkspace.id));
+      publishSidebarSync({ type: "workspace-deleted", workspaceId: deletingWorkspace.id });
       showToast("Workspace deleted");
     } catch (err) {
       showToast(err instanceof ApiError ? err.message : "Failed to delete workspace", "error");
@@ -247,12 +251,14 @@ export default function WorkspacesPage() {
                 setCreateError(null);
                 setSearchQuery("");
               }}
-              className="flex items-center gap-2 rounded-lg bg-brand-600 px-3.5 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
+              className="flex min-h-11 w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-3.5 py-2 text-sm font-medium text-white shadow-sm hover:bg-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 sm:w-auto sm:justify-start"
             >
               <PlusIcon className="h-4 w-4" />
               New workspace
             </button>
-            <ProfileMenu />
+            <div className="hidden sm:block">
+              <ProfileMenu />
+            </div>
           </div>
         </div>
 

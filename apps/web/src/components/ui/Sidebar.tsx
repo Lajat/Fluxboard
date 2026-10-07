@@ -6,8 +6,10 @@ import Link from "next/link";
 import { useAuth } from "@/context/AuthContext";
 import { useActiveWorkspace } from "@/context/ActiveWorkspaceContext";
 import { NotificationBell } from "@/components/NotificationBell";
+import { ProfileMenu } from "@/components/ProfileMenu";
 import { apiFetch } from "@/lib/apiClient";
 import { getSocket } from "@/lib/socket";
+import { SIDEBAR_SYNC_EVENT, type SidebarSyncDetail } from "@/lib/sidebarSync";
 import { APP_NAME } from "@/lib/constants";
 import { avatarColorFor, initialsFor } from "@/lib/avatar";
 import {
@@ -137,6 +139,10 @@ export function Sidebar() {
       });
     }
 
+    function handleWorkspaceUpdated(workspace: Workspace) {
+      setWorkspaces((prev) => prev.map((ws) => (ws.id === workspace.id ? workspace : ws)));
+    }
+
     // Without this, a new board only ever shows up in whichever tab
     // created it, and only after that tab's own HTTP response — the
     // sidebar's boardsByWorkspace map is separate local state, so it
@@ -168,17 +174,73 @@ export function Sidebar() {
       });
     }
 
+    function handleBoardUpdated(board: Board) {
+      setBoardsByWorkspace((prev) => {
+        if (!prev[board.workspaceId]) return prev;
+        return {
+          ...prev,
+          [board.workspaceId]: prev[board.workspaceId].map((current) =>
+            current.id === board.id ? board : current
+          ),
+        };
+      });
+    }
+
+    function handleSidebarSync(event: Event) {
+      const { detail } = event as CustomEvent<SidebarSyncDetail>;
+      switch (detail.type) {
+        case "workspace-upserted":
+          deletedWorkspaceIds.current.delete(detail.workspace.id);
+          setWorkspaces((prev) =>
+            prev.some((workspace) => workspace.id === detail.workspace.id)
+              ? prev.map((workspace) => (workspace.id === detail.workspace.id ? detail.workspace : workspace))
+              : [...prev, detail.workspace]
+          );
+          break;
+        case "workspace-deleted":
+          deletedWorkspaceIds.current.add(detail.workspaceId);
+          setWorkspaces((prev) => prev.filter((workspace) => workspace.id !== detail.workspaceId));
+          setBoardsByWorkspace((prev) => {
+            const next = { ...prev };
+            delete next[detail.workspaceId];
+            return next;
+          });
+          break;
+        case "board-upserted":
+          setBoardsByWorkspace((prev) => {
+            const boards = prev[detail.board.workspaceId];
+            if (!boards) return prev;
+            return {
+              ...prev,
+              [detail.board.workspaceId]: boards.some((board) => board.id === detail.board.id)
+                ? boards.map((board) => (board.id === detail.board.id ? detail.board : board))
+                : [...boards, detail.board],
+            };
+          });
+          break;
+        case "board-deleted":
+          handleBoardDeleted(detail.board);
+          break;
+      }
+    }
+
     socket.on(SocketEvents.MEMBER_ADDED, handleMemberAdded);
     socket.on(SocketEvents.ACCESS_REVOKED, handleAccessRevoked);
     socket.on(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
+    socket.on(SocketEvents.WORKSPACE_UPDATED, handleWorkspaceUpdated);
     socket.on(SocketEvents.BOARD_CREATED, handleBoardCreated);
+    socket.on(SocketEvents.BOARD_UPDATED, handleBoardUpdated);
     socket.on(SocketEvents.BOARD_DELETED, handleBoardDeleted);
+    window.addEventListener(SIDEBAR_SYNC_EVENT, handleSidebarSync);
     return () => {
       socket.off(SocketEvents.MEMBER_ADDED, handleMemberAdded);
       socket.off(SocketEvents.ACCESS_REVOKED, handleAccessRevoked);
       socket.off(SocketEvents.WORKSPACE_DELETED, handleWorkspaceDeleted);
+      socket.off(SocketEvents.WORKSPACE_UPDATED, handleWorkspaceUpdated);
       socket.off(SocketEvents.BOARD_CREATED, handleBoardCreated);
+      socket.off(SocketEvents.BOARD_UPDATED, handleBoardUpdated);
       socket.off(SocketEvents.BOARD_DELETED, handleBoardDeleted);
+      window.removeEventListener(SIDEBAR_SYNC_EVENT, handleSidebarSync);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
@@ -292,11 +354,11 @@ export function Sidebar() {
           use for their mobile web headers — means there's only one
           element in that region, so nothing can overlap it, on every
           page, since this is rendered once here rather than per-page. */}
-      <div className="fixed inset-x-0 top-0 z-30 flex items-center gap-3 border-b border-slate-200 bg-white px-3 py-2.5 shadow-sm sm:hidden">
+      <div className="fixed inset-x-0 top-0 z-30 flex items-center gap-3 border-b border-slate-200 bg-white px-3 py-2 shadow-sm sm:hidden">
         <button
           onClick={() => setIsMobileOpen(true)}
           aria-label="Open navigation"
-          className="rounded-lg p-1.5 text-slate-600 hover:bg-slate-100"
+          className="rounded-lg p-3 text-slate-600 hover:bg-slate-100"
         >
           <MenuIcon className="h-5 w-5" />
         </button>
@@ -306,8 +368,9 @@ export function Sidebar() {
           </div>
           <span className="text-sm font-semibold text-slate-800">{APP_NAME}</span>
         </div>
-        <div className="ml-auto flex items-center">
+        <div className="ml-auto flex items-center gap-2">
           <NotificationBell />
+          <ProfileMenu />
         </div>
       </div>
 
