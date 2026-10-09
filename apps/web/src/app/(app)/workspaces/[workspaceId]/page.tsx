@@ -16,6 +16,7 @@ import { AvatarStack } from "@/components/ui/AvatarStack";
 import { MembersModal } from "@/components/MembersModal";
 import {
   ChevronLeftIcon,
+  CrownIcon,
   LayoutIcon,
   PlusIcon,
   TrashIcon,
@@ -66,8 +67,17 @@ export default function WorkspaceBoardsPage() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<"name" | "created">("name");
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [viewMode, setViewMode] = useState<"grid" | "list">(() => {
+    if (typeof window === "undefined") return "grid";
+    const stored = window.localStorage.getItem(`fluxboard:workspace-view-mode:${workspaceId}`);
+    return stored === "list" ? "list" : "grid";
+  });
   const createBoardInFlight = useRef(false);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    window.localStorage.setItem(`fluxboard:workspace-view-mode:${workspaceId}`, viewMode);
+  }, [viewMode, workspaceId]);
   const [deletingBoard, setDeletingBoard] = useState<Board | null>(null);
   const [isMembersModalOpen, setIsMembersModalOpen] = useState(false);
   const [inviteToken, setInviteToken] = useState<string | null>(null);
@@ -84,6 +94,7 @@ export default function WorkspaceBoardsPage() {
         canAdd: true,
         canEdit: true,
         canDelete: true,
+        canEditWorkspace: true,
         canAddBoards: true,
         canEditBoards: true,
         canDeleteBoards: true,
@@ -95,6 +106,7 @@ export default function WorkspaceBoardsPage() {
         canAdd: false,
         canEdit: false,
         canDelete: false,
+        canEditWorkspace: false,
         canAddBoards: false,
         canEditBoards: false,
         canDeleteBoards: false,
@@ -175,7 +187,9 @@ export default function WorkspaceBoardsPage() {
 
     function handleWorkspaceUpdated(updated: Workspace) {
       if (updated.id !== workspaceId) return;
-      setWorkspace(updated);
+      setWorkspace((current) =>
+        current ? { ...updated, myPermissions: current.myPermissions } : updated
+      );
     }
 
     function handleWorkspaceDeleted(deleted: Workspace) {
@@ -198,6 +212,11 @@ export default function WorkspaceBoardsPage() {
     function handleMemberPermissionsUpdated({ workspaceId: wsId, member }: MemberPermissionsUpdatedPayload) {
       if (wsId !== workspaceId) return;
       setMembers((prev) => prev.map((m) => (m.id === member.id ? member : m)));
+      if (member.id === user?.id) {
+        setWorkspace((current) =>
+          current ? { ...current, myPermissions: member.permissions } : current
+        );
+      }
     }
 
     socket.on(SocketEvents.BOARD_CREATED, handleBoardCreated);
@@ -250,6 +269,21 @@ export default function WorkspaceBoardsPage() {
     } finally {
       createBoardInFlight.current = false;
       setIsSubmittingBoard(false);
+    }
+  }
+
+  async function handleRenameWorkspace(name: string) {
+    if (!workspaceId || !workspace) return;
+    try {
+      const updated = await apiFetch<Workspace>(`/workspaces/${workspaceId}`, {
+        method: "PATCH",
+        accessToken,
+        body: { name },
+      });
+      setWorkspace(updated);
+      publishSidebarSync({ type: "workspace-upserted", workspace: updated });
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : "Failed to rename workspace", "error");
     }
   }
 
@@ -368,9 +402,22 @@ export default function WorkspaceBoardsPage() {
 
         <div className="mb-7 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">
-              {workspace?.name ?? "Workspace"}
-            </h1>
+            <div className="flex items-center gap-2">
+              <EditableTitle
+                as="h1"
+                value={workspace?.name ?? "Workspace"}
+                onSave={handleRenameWorkspace}
+                disabled={!workspace?.myPermissions?.canEditWorkspace}
+                className="text-xl font-bold text-slate-900 sm:text-2xl"
+                inputClassName="w-full rounded-lg border border-brand-300 bg-white px-2 py-0.5 text-xl font-bold text-slate-900 outline-none ring-2 ring-brand-100 sm:text-2xl"
+              />
+              {isOwner && (
+                <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
+                  <CrownIcon aria-hidden="true" className="h-3.5 w-3.5" />
+                  Owner
+                </span>
+              )}
+            </div>
             <p className="mt-1.5 text-sm text-slate-500">
               Browse and manage the boards in this workspace.
             </p>
@@ -426,8 +473,9 @@ export default function WorkspaceBoardsPage() {
                 type="button"
                 onClick={() => setViewMode("grid")}
                 aria-label="Grid view"
+                title="Grid view"
                 aria-pressed={viewMode === "grid"}
-                className={`rounded-md p-1.5 ${
+                className={`cursor-pointer rounded-md p-1.5 ${
                   viewMode === "grid" ? "bg-brand-50 text-brand-700" : "text-slate-400 hover:text-slate-700"
                 }`}
               >
@@ -437,8 +485,9 @@ export default function WorkspaceBoardsPage() {
                 type="button"
                 onClick={() => setViewMode("list")}
                 aria-label="List view"
+                title="List view"
                 aria-pressed={viewMode === "list"}
-                className={`rounded-md p-1.5 ${
+                className={`cursor-pointer rounded-md p-1.5 ${
                   viewMode === "list" ? "bg-brand-50 text-brand-700" : "text-slate-400 hover:text-slate-700"
                 }`}
               >
@@ -467,12 +516,18 @@ export default function WorkspaceBoardsPage() {
             >
               <Link
                 href={`/boards/${board.id}`}
-                className={`${
+                aria-label={`Open ${board.title}`}
+                className={`absolute inset-0 z-0 ${
+                  viewMode === "grid" ? "rounded-xl" : "rounded-xl"
+                }`}
+              />
+              <div
+                className={`pointer-events-none ${
                   viewMode === "grid"
-                    ? `flex h-28 flex-col justify-between rounded-xl bg-gradient-to-br p-3 text-white shadow-sm transition hover:shadow-lg ${
+                    ? `relative z-10 flex h-28 flex-col justify-between rounded-xl bg-gradient-to-br p-3 text-white shadow-sm transition hover:shadow-lg ${
                         BOARD_GRADIENTS[i % BOARD_GRADIENTS.length]
                       }`
-                    : "flex min-w-0 flex-1 items-center gap-3"
+                    : "pointer-events-none relative z-10 flex min-w-0 flex-1 items-center gap-3"
                 }`}
               >
                 {viewMode === "list" && (
@@ -492,7 +547,7 @@ export default function WorkspaceBoardsPage() {
                     value={board.title}
                     onSave={(next) => handleRenameBoard(board.id, next)}
                     disabled={!myPermissions.canEditBoards}
-                    className={`line-clamp-2 text-sm font-semibold ${
+                    className={`pointer-events-auto line-clamp-2 text-sm font-semibold ${
                       viewMode === "grid" ? "text-white hover:bg-white/15" : "text-slate-900"
                     }`}
                     inputClassName={`w-full rounded-md px-1.5 py-0.5 text-sm font-semibold outline-none ring-2 ${
@@ -502,9 +557,9 @@ export default function WorkspaceBoardsPage() {
                     }`}
                   />
                 </div>
-              </Link>
+              </div>
               {viewMode === "list" && (
-                <div className="mr-9 flex shrink-0 items-center gap-6 text-right">
+                <div className="pointer-events-none mr-9 flex shrink-0 items-center gap-6 text-right">
                   <div className="hidden text-left sm:block">
                     <p className="text-sm text-slate-700">
                       {board.listOrder.length} list{board.listOrder.length === 1 ? "" : "s"}
@@ -527,10 +582,11 @@ export default function WorkspaceBoardsPage() {
                 <button
                   onClick={(e) => {
                     e.preventDefault();
+                    e.stopPropagation();
                     setDeletingBoard(board);
                   }}
                   aria-label={`Delete ${board.title}`}
-                  className={`absolute rounded-md p-1.5 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 ${
+                  className={`absolute z-20 rounded-md p-1.5 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 ${
                     viewMode === "grid"
                       ? "right-2 top-2 bg-black/20 text-white backdrop-blur-sm hover:bg-black/40"
                       : "right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:bg-red-50 hover:text-red-500"

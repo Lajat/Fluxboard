@@ -34,6 +34,15 @@ export function SearchIcon(props: IconProps) {
   );
 }
 
+export function CrownIcon(props: IconProps) {
+  return (
+    <svg {...base} {...props}>
+      <path d="m2.5 7 5 4 4.5-7 4.5 7 5-4-2 12h-15l-2-12Z" />
+      <path d="M5 19h14" />
+    </svg>
+  );
+}
+
 export function InfoIcon(props: IconProps) {
   return (
     <svg {...base} {...props}>

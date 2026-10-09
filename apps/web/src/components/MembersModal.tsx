@@ -104,10 +104,41 @@ export function MembersModal({
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [isInviting, setIsInviting] = useState(false);
   const inviteInFlight = useRef(false);
+  const permissionUpdateQueues = useRef(new Map<string, Promise<void>>());
   const [removingMember, setRemovingMember] = useState<WorkspaceMember | null>(null);
   const [confirmingRegenerate, setConfirmingRegenerate] = useState(false);
   const [justCopied, setJustCopied] = useState(false);
-  const [savingPermissionKey, setSavingPermissionKey] = useState<string | null>(null);
+  const [savingPermissionKeys, setSavingPermissionKeys] = useState<Set<string>>(() => new Set());
+
+  function setPermissionSaving(key: string, isSaving: boolean) {
+    setSavingPermissionKeys((current) => {
+      const next = new Set(current);
+      if (isSaving) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }
+
+  function queuePermissionUpdate(
+    member: WorkspaceMember,
+    key: string,
+    updates: Partial<WorkspacePermissions>
+  ) {
+    setPermissionSaving(key, true);
+    const previous = permissionUpdateQueues.current.get(member.id) ?? Promise.resolve();
+    let operation: Promise<void>;
+    operation = previous
+      .catch(() => undefined)
+      .then(() => onUpdatePermissions(member, updates))
+      .finally(() => {
+        setPermissionSaving(key, false);
+        if (permissionUpdateQueues.current.get(member.id) === operation) {
+          permissionUpdateQueues.current.delete(member.id);
+        }
+      });
+    permissionUpdateQueues.current.set(member.id, operation);
+    return operation;
+  }
 
   const validationError = getEmailError(email);
 
@@ -163,22 +194,17 @@ export function MembersModal({
     }
 
     const key = `${member.id}-${fullField}`;
-    setSavingPermissionKey(key);
-    try {
-      await onUpdatePermissions(member, updates);
-    } finally {
-      setSavingPermissionKey(null);
-    }
+    await queuePermissionUpdate(member, key, updates);
+  }
+
+  async function handleToggleWorkspaceEdit(member: WorkspaceMember, enabled: boolean) {
+    const key = `${member.id}-canEditWorkspace`;
+    await queuePermissionUpdate(member, key, { canEditWorkspace: enabled });
   }
 
   async function handleApplyPreset(member: WorkspaceMember, preset: PermissionPreset) {
     const key = `${member.id}-preset`;
-    setSavingPermissionKey(key);
-    try {
-      await onUpdatePermissions(member, permissionPresets[preset]);
-    } finally {
-      setSavingPermissionKey(null);
-    }
+    await queuePermissionUpdate(member, key, permissionPresets[preset]);
   }
 
   function getActivePreset(member: WorkspaceMember): PermissionPreset | null {
@@ -309,7 +335,7 @@ export function MembersModal({
               {/* Workspace owners can set permissions for non-owner members. */}
               {isOwner && member.role !== "owner" && (
                 <div className="ml-12 mt-3 space-y-3">
-                  <fieldset disabled={savingPermissionKey !== null}>
+                  <fieldset disabled={savingPermissionKeys.has(`${member.id}-preset`)}>
                     <legend className="mb-1.5 flex w-full items-center justify-between text-xs font-semibold text-slate-600">
                       Access preset
                       <span className="font-normal text-slate-500">
@@ -335,13 +361,30 @@ export function MembersModal({
                             <span className="mt-0.5 block text-[10px] font-normal leading-tight text-slate-500">
                               {preset === "Viewer" && "View only"}
                               {preset === "Contributor" && "Work with board content"}
-                              {preset === "Full access" && "Manage everything"}
+                              {preset === "Full access" && "All board and content actions"}
                             </span>
                           </button>
                         );
                       })}
                     </div>
                   </fieldset>
+
+                  <label className="flex items-start gap-2 rounded-lg border border-slate-200 px-3 py-2.5 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={member.permissions.canEditWorkspace}
+                      disabled={savingPermissionKeys.has(`${member.id}-canEditWorkspace`)}
+                      aria-label={`Edit workspace settings for ${member.displayName}`}
+                      onChange={(event) => handleToggleWorkspaceEdit(member, event.target.checked)}
+                      className="mt-0.5 h-4 w-4 cursor-pointer rounded border-slate-300 accent-brand-600 disabled:cursor-not-allowed disabled:opacity-40"
+                    />
+                    <span>
+                      <span className="block font-medium text-slate-700">Edit workspace name</span>
+                      <span className="mt-0.5 block text-[10px] leading-tight text-slate-500">
+                        Allows this member to rename the workspace. The owner can always rename it.
+                      </span>
+                    </span>
+                  </label>
 
                   <div className="overflow-hidden rounded-lg border border-slate-200">
                     <table className="w-full table-fixed text-left text-xs">
@@ -372,7 +415,7 @@ export function MembersModal({
                                 member.permissions[permissionFields[axis].Add] &&
                                 member.permissions[permissionFields[axis].Edit];
                               const deleteBlocked = action === "Delete" && !checked && !canDeleteBeEnabled;
-                              const isSaving = savingPermissionKey !== null;
+                              const isSaving = savingPermissionKeys.has(`${member.id}-${field}`);
                               return (
                                 <td key={field} className="px-2 py-2.5 text-center">
                                   <input
@@ -395,7 +438,7 @@ export function MembersModal({
 
                   <p className="text-[11px] leading-relaxed text-slate-500">
                     Workspace members can view its boards. These settings control changes; deleting requires both Add and Edit.
-                    {savingPermissionKey?.startsWith(`${member.id}-`) && (
+                    {[...savingPermissionKeys].some((key) => key.startsWith(`${member.id}-`)) && (
                       <span className="ml-1 inline-flex items-center gap-1 text-slate-600">
                         <SpinnerIcon className="h-3 w-3" /> Saving
                       </span>
