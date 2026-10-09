@@ -5,7 +5,7 @@ import { Modal } from "./ui/Modal";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
 import { avatarColorFor, initialsFor } from "@/lib/avatar";
 import { emailError as getEmailError } from "@/lib/validation";
-import { UserPlusIcon, TrashIcon, SpinnerIcon, LinkIcon, CheckIcon } from "./ui/icons";
+import { UserPlusIcon, TrashIcon, SpinnerIcon, LinkIcon, CheckIcon, SearchIcon } from "./ui/icons";
 import type { WorkspaceMember, WorkspacePermissions } from "@fluxboard/shared-types";
 
 type PermissionAxis = "Boards" | "Cards";
@@ -65,6 +65,7 @@ interface MembersModalProps {
   onClose: () => void;
   workspaceName: string;
   members: WorkspaceMember[];
+  activeMemberIds?: string[];
   isOwner: boolean;
   currentUserId: string;
   onInvite: (email: string) => Promise<void>;
@@ -90,6 +91,7 @@ export function MembersModal({
   onClose,
   workspaceName,
   members,
+  activeMemberIds = [],
   isOwner,
   currentUserId,
   onInvite,
@@ -99,7 +101,10 @@ export function MembersModal({
   isLoadingInviteLink,
   onRegenerateInviteLink,
 }: MembersModalProps) {
+  const activeMembers = new Set(activeMemberIds);
+  const activeMemberCount = members.filter((member) => activeMembers.has(member.id)).length;
   const [email, setEmail] = useState("");
+  const [memberSearch, setMemberSearch] = useState("");
   const [touched, setTouched] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [isInviting, setIsInviting] = useState(false);
@@ -141,6 +146,15 @@ export function MembersModal({
   }
 
   const validationError = getEmailError(email);
+  const visibleMembers = members
+    .filter((member) => {
+      const query = memberSearch.trim().toLowerCase();
+      return !query || member.displayName.toLowerCase().includes(query) || member.email.toLowerCase().includes(query);
+    })
+    .sort((a, b) => {
+      if (a.role !== b.role) return a.role === "owner" ? -1 : 1;
+      return a.displayName.localeCompare(b.displayName);
+    });
 
   async function handleInvite(e: FormEvent) {
     e.preventDefault();
@@ -295,16 +309,39 @@ export function MembersModal({
           </div>
         )}
 
-        <ul className="max-h-72 space-y-1 overflow-y-auto">
-          {members.map((member) => (
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-slate-700">People with access</h3>
+          <span className="text-right text-xs text-slate-400">
+            {activeMemberCount > 0 && (
+              <span className="mr-2 font-medium text-emerald-700">{activeMemberCount} viewing</span>
+            )}
+            {members.length} total
+          </span>
+        </div>
+        <label className="relative mb-2 block">
+          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="search"
+            value={memberSearch}
+            onChange={(event) => setMemberSearch(event.target.value)}
+            placeholder="Find by name or email"
+            aria-label="Find workspace member by name or email"
+            className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm outline-none transition focus:border-brand-300 focus:ring-2 focus:ring-brand-100"
+          />
+        </label>
+        <ul className="max-h-[min(55vh,32rem)] space-y-1 overflow-y-auto">
+          {visibleMembers.map((member) => (
             <li key={member.id} className="rounded-lg px-2 py-2 hover:bg-slate-50">
               <div className="flex items-center gap-3">
                 <span
-                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white ${avatarColorFor(
+                  className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white ${avatarColorFor(
                     member.id
                   )}`}
                 >
                   {initialsFor(member.displayName)}
+                  {activeMembers.has(member.id) && (
+                    <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full bg-emerald-500 ring-2 ring-white" />
+                  )}
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium text-slate-800">
@@ -315,6 +352,9 @@ export function MembersModal({
                   </p>
                   <p className="truncate text-xs text-slate-400">{member.email}</p>
                 </div>
+                {activeMembers.has(member.id) && (
+                  <span className="shrink-0 text-[11px] font-medium text-emerald-700">Viewing board</span>
+                )}
                 {member.role === "owner" ? (
                   <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-600">
                     Owner
@@ -448,6 +488,9 @@ export function MembersModal({
               )}
             </li>
           ))}
+          {visibleMembers.length === 0 && (
+            <li className="px-2 py-6 text-center text-sm text-slate-400">No people match that search.</li>
+          )}
         </ul>
       </Modal>
 

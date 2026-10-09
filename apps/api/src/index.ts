@@ -8,6 +8,7 @@ import { Server as SocketIOServer } from "socket.io";
 import { connectToDatabase } from "./config/database";
 import { WorkspaceModel } from "./models/Workspace";
 import { BoardModel } from "./models/Board";
+import { SocketEvents } from "@fluxboard/shared-types";
 import authRoutes from "./routes/authRoutes";
 import workspaceRoutes from "./routes/workspaceRoutes";
 import boardRoutes from "./routes/boardRoutes";
@@ -54,6 +55,22 @@ const io = new SocketIOServer(httpServer, {
   cors: { origin: WEB_ORIGIN, credentials: true },
 });
 
+const boardPresence = new Map<string, Map<string, Set<string>>>();
+
+function broadcastBoardPresence(boardId: string) {
+  const userIds = [...(boardPresence.get(boardId)?.keys() ?? [])];
+  io.to(`board:${boardId}`).emit(SocketEvents.BOARD_PRESENCE_UPDATED, { boardId, userIds });
+}
+
+function removeBoardPresence(boardId: string, userId: string, socketId: string) {
+  const users = boardPresence.get(boardId);
+  const sockets = users?.get(userId);
+  if (!users || !sockets || !sockets.delete(socketId)) return;
+  if (sockets.size === 0) users.delete(userId);
+  if (users.size === 0) boardPresence.delete(boardId);
+  broadcastBoardPresence(boardId);
+}
+
 io.on("connection", (socket) => {
   console.log(`[socket] client connected: ${socket.id}`);
 
@@ -74,6 +91,10 @@ io.on("connection", (socket) => {
     socket.join(`user:${userId}`);
   }
 
+  const joinedPresenceBoards = new Set<string>();
+  const boardJoinRequests = new Map<string, number>();
+  let nextBoardJoinRequestId = 0;
+
   // Clients join a per-board "room" so events only reach people actually
   // looking at that board, not every connected client on the whole app.
   // Membership is checked using socket.data.userId set above — if the
@@ -81,12 +102,37 @@ io.on("connection", (socket) => {
   // silently declines to join rather than trusting an unauthenticated
   // socket with a bare boardId.
   socket.on("join-board", async (boardId: string) => {
-    if (!(await socketCanAccessBoard(socket.data.userId, boardId))) return;
+    if (typeof boardId !== "string" || !boardId) return;
+    const requestId = ++nextBoardJoinRequestId;
+    boardJoinRequests.set(boardId, requestId);
+    const authenticatedUserId = userId;
+    if (!authenticatedUserId || !(await socketCanAccessBoard(authenticatedUserId, boardId))) {
+      if (boardJoinRequests.get(boardId) === requestId) boardJoinRequests.delete(boardId);
+      return;
+    }
+    if (!socket.connected || boardJoinRequests.get(boardId) !== requestId) return;
+    boardJoinRequests.delete(boardId);
+
     socket.join(`board:${boardId}`);
+    if (joinedPresenceBoards.has(boardId)) return;
+    joinedPresenceBoards.add(boardId);
+
+    const users = boardPresence.get(boardId) ?? new Map<string, Set<string>>();
+    const sockets = users.get(authenticatedUserId) ?? new Set<string>();
+    const isFirstConnection = sockets.size === 0;
+    sockets.add(socket.id);
+    users.set(authenticatedUserId, sockets);
+    boardPresence.set(boardId, users);
+    if (isFirstConnection) broadcastBoardPresence(boardId);
+    else socket.emit(SocketEvents.BOARD_PRESENCE_UPDATED, { boardId, userIds: [...users.keys()] });
   });
 
   socket.on("leave-board", (boardId: string) => {
+    if (typeof boardId !== "string" || !boardId) return;
+    boardJoinRequests.delete(boardId);
     socket.leave(`board:${boardId}`);
+    if (!joinedPresenceBoards.delete(boardId) || !userId) return;
+    removeBoardPresence(boardId, userId, socket.id);
   });
 
   // Same idea, one level up: the workspace's board-list page joins this
@@ -102,6 +148,10 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    boardJoinRequests.clear();
+    for (const boardId of joinedPresenceBoards) {
+      if (userId) removeBoardPresence(boardId, userId, socket.id);
+    }
     console.log(`[socket] client disconnected: ${socket.id}`);
   });
 });

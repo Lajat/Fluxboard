@@ -35,9 +35,21 @@ import {
   TrashIcon,
   PlusIcon,
   SpinnerIcon,
-  MoreIcon,
+  XIcon,
 } from "@/components/ui/icons";
-import type { Board, List, Card, Workspace, WorkspaceMember, WorkspacePermissions } from "@fluxboard/shared-types";
+import {
+  LABEL_COLORS,
+  PRIORITY_META,
+  type Board,
+  type List,
+  type Card,
+  type BoardPresencePayload,
+  type LabelColor,
+  type Priority,
+  type Workspace,
+  type WorkspaceMember,
+  type WorkspacePermissions,
+} from "@fluxboard/shared-types";
 import {
   SocketEvents,
   type CardMovedPayload,
@@ -100,8 +112,6 @@ export default function BoardPage() {
   const [isLoadingBoard, setIsLoadingBoard] = useState(true);
   const [openCard, setOpenCard] = useState<Card | null>(null);
   const [confirmingBoardDelete, setConfirmingBoardDelete] = useState(false);
-  const [isBoardActionsOpen, setIsBoardActionsOpen] = useState(false);
-  const boardActionsRef = useRef<HTMLDivElement>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const { setActiveWorkspaceId } = useActiveWorkspace();
 
@@ -112,7 +122,17 @@ export default function BoardPage() {
     if (board?.workspaceId) setActiveWorkspaceId(board.workspaceId);
   }, [board?.workspaceId, setActiveWorkspaceId]);
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
+  const [activeBoardUserIds, setActiveBoardUserIds] = useState<string[]>([]);
   const [isMembersModalOpen, setIsMembersModalOpen] = useState(false);
+  const [cardSearch, setCardSearch] = useState("");
+  const [isMobileFilterSummaryOpen, setIsMobileFilterSummaryOpen] = useState(false);
+  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
+  const filterButtonRef = useRef<HTMLButtonElement>(null);
+  const filterPanelRef = useRef<HTMLDivElement>(null);
+  const [selectedAssigneeId, setSelectedAssigneeId] = useState<string | null>(null);
+  const [selectedPriority, setSelectedPriority] = useState<Priority | "none" | "any">("any");
+  const [selectedDueDate, setSelectedDueDate] = useState<"any" | "overdue" | "next7" | "no-date">("any");
+  const [selectedLabel, setSelectedLabel] = useState<LabelColor | "any">("any");
   const [inviteToken, setInviteToken] = useState<string | null>(null);
   const [isLoadingInviteLink, setIsLoadingInviteLink] = useState(false);
   // Computed early (rather than inline in JSX) because it's also needed
@@ -144,15 +164,22 @@ export default function BoardPage() {
   const [canScrollRight, setCanScrollRight] = useState(false);
 
   useEffect(() => {
-    if (!isBoardActionsOpen) return;
+    if (!isFilterPanelOpen) return;
 
     function closeOnOutsideClick(event: PointerEvent) {
-      if (event.target instanceof Node && !boardActionsRef.current?.contains(event.target)) {
-        setIsBoardActionsOpen(false);
+      if (
+        event.target instanceof Node &&
+        !filterPanelRef.current?.contains(event.target) &&
+        !filterButtonRef.current?.contains(event.target)
+      ) {
+        setIsFilterPanelOpen(false);
       }
     }
     function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setIsBoardActionsOpen(false);
+      if (event.key === "Escape") {
+        setIsFilterPanelOpen(false);
+        filterButtonRef.current?.focus();
+      }
     }
 
     document.addEventListener("pointerdown", closeOnOutsideClick);
@@ -161,7 +188,7 @@ export default function BoardPage() {
       document.removeEventListener("pointerdown", closeOnOutsideClick);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [isBoardActionsOpen]);
+  }, [isFilterPanelOpen]);
 
   const updateScrollState = useCallback(() => {
     const el = scrollRef.current;
@@ -363,7 +390,12 @@ export default function BoardPage() {
   useEffect(() => {
     if (!accessToken) return;
     const socket = getSocket();
-    socket.emit("join-board", boardId);
+    setActiveBoardUserIds([]);
+
+    function handleBoardPresence({ boardId: eventBoardId, userIds }: BoardPresencePayload) {
+      if (eventBoardId === boardId) setActiveBoardUserIds(userIds);
+    }
+
     // Room membership lives on the server-side connection and is wiped
     // out on every disconnect — a dropped wifi connection or a laptop
     // waking from sleep silently reconnects the underlying socket but
@@ -371,7 +403,9 @@ export default function BoardPage() {
     function rejoinOnReconnect() {
       socket.emit("join-board", boardId);
     }
+    socket.on(SocketEvents.BOARD_PRESENCE_UPDATED, handleBoardPresence);
     socket.on("connect", rejoinOnReconnect);
+    if (socket.connected) rejoinOnReconnect();
 
     function upsertCard(card: Card) {
       setCardsById((prev) => ({ ...prev, [card.id]: card }));
@@ -444,6 +478,7 @@ export default function BoardPage() {
     return () => {
       socket.emit("leave-board", boardId);
       socket.off("connect", rejoinOnReconnect);
+      socket.off(SocketEvents.BOARD_PRESENCE_UPDATED, handleBoardPresence);
       socket.off(SocketEvents.CARD_CREATED, upsertCard);
       socket.off(SocketEvents.CARD_UPDATED, handleCardUpdated);
       socket.off(SocketEvents.CARD_DELETED, handleCardDeleted);
@@ -774,6 +809,104 @@ export default function BoardPage() {
     }
   }
 
+  const hasActiveFilters =
+    cardSearch.trim().length > 0 ||
+    selectedAssigneeId !== null ||
+    selectedPriority !== "any" ||
+    selectedDueDate !== "any" ||
+    selectedLabel !== "any";
+  const activeFilterCount = [
+    selectedAssigneeId !== null,
+    selectedPriority !== "any",
+    selectedDueDate !== "any",
+    selectedLabel !== "any",
+  ].filter(Boolean).length;
+  const selectedAssigneeName =
+    selectedAssigneeId === "unassigned"
+      ? "Unassigned"
+      : members.find((member) => member.id === selectedAssigneeId)?.displayName ?? "Assignee";
+  const selectedLabelName =
+    selectedLabel === "any" ? "" : `${selectedLabel[0].toUpperCase()}${selectedLabel.slice(1)}`;
+  const selectedDueDateName = {
+    any: "",
+    overdue: "Overdue",
+    next7: "Due in 7 days",
+    "no-date": "No due date",
+  }[selectedDueDate];
+  const activeFilterChips = [
+    ...(selectedAssigneeId
+      ? [{ label: `Assignee: ${selectedAssigneeName}`, onClear: () => setSelectedAssigneeId(null) }]
+      : []),
+    ...(selectedPriority !== "any"
+      ? [{
+          label: `Priority: ${selectedPriority === "none" ? "None" : PRIORITY_META[selectedPriority].label}`,
+          onClear: () => setSelectedPriority("any"),
+        }]
+      : []),
+    ...(selectedDueDate !== "any"
+      ? [{ label: `Due: ${selectedDueDateName}`, onClear: () => setSelectedDueDate("any") }]
+      : []),
+    ...(selectedLabel !== "any"
+      ? [{ label: `Label: ${selectedLabelName}`, onClear: () => setSelectedLabel("any") }]
+      : []),
+  ];
+  const activeCriteriaChips = [
+    ...(cardSearch.trim()
+      ? [{ label: `Search: “${cardSearch.trim()}”`, onClear: () => setCardSearch("") }]
+      : []),
+    ...activeFilterChips,
+  ];
+  const shouldCollapseMobileChips = activeCriteriaChips.length >= 3;
+  function matchesCardFilters(card: Card) {
+    const query = cardSearch.trim().toLowerCase();
+    if (
+      query &&
+      ![card.title, card.description ?? "", card.taskId ?? ""]
+        .some((value) => value.toLowerCase().includes(query))
+    ) {
+      return false;
+    }
+    if (selectedAssigneeId === "unassigned" && card.assigneeId) return false;
+    if (
+      selectedAssigneeId &&
+      selectedAssigneeId !== "unassigned" &&
+      card.assigneeId !== selectedAssigneeId
+    ) {
+      return false;
+    }
+    if (selectedPriority === "none" && card.priority) return false;
+    if (selectedPriority !== "any" && selectedPriority !== "none" && card.priority !== selectedPriority) {
+      return false;
+    }
+    if (selectedLabel !== "any" && !card.labels?.includes(selectedLabel)) return false;
+    if (selectedDueDate !== "any") {
+      if (selectedDueDate === "no-date") {
+        if (card.dueDate) return false;
+      } else {
+        if (!card.dueDate) return false;
+        const dueDay = new Date(card.dueDate);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        dueDay.setHours(0, 0, 0, 0);
+        if (selectedDueDate === "overdue" && dueDay >= today) return false;
+        if (selectedDueDate === "next7") {
+          const lastIncludedDay = new Date(today);
+          lastIncludedDay.setDate(lastIncludedDay.getDate() + 7);
+          if (dueDay < today || dueDay > lastIncludedDay) return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  function clearCardFilters() {
+    setCardSearch("");
+    setSelectedAssigneeId(null);
+    setSelectedPriority("any");
+    setSelectedDueDate("any");
+    setSelectedLabel("any");
+  }
+
   if (authLoading || isLoadingBoard) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-slate-50">
@@ -791,20 +924,20 @@ export default function BoardPage() {
           nothing to stick to — and no translucent/blurred header for cards to
           slide underneath. */}
       <header className="shrink-0 border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
-        <Link
-          href={board ? `/workspaces/${board.workspaceId}` : "/workspaces"}
-          className="mb-2 inline-flex items-center gap-1 text-sm text-slate-500 hover:text-brand-600"
-        >
-          <ChevronLeftIcon className="h-4 w-4" /> Back to boards
-        </Link>
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-2">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] grid-rows-[auto_auto] items-center gap-x-2 gap-y-2 [grid-template-areas:'breadcrumb_actions'_'title_title'] sm:grid-cols-[minmax(0,1fr)_auto] sm:grid-rows-[auto_auto] sm:gap-y-1 sm:[grid-template-areas:'breadcrumb_breadcrumb'_'title_actions']">
+          <Link
+            href={board ? `/workspaces/${board.workspaceId}` : "/workspaces"}
+            className="[grid-area:breadcrumb] inline-flex min-w-0 items-center gap-1 text-sm text-slate-500 hover:text-brand-600"
+          >
+            <ChevronLeftIcon className="h-4 w-4 shrink-0" /> Back to boards
+          </Link>
+          <div className="flex min-w-0 items-center gap-2 [grid-area:title]">
             <EditableTitle
               as="h1"
               value={board?.title ?? ""}
               onSave={handleRenameBoard}
               disabled={!myPermissions.canEdit}
-              className="text-xl font-bold text-slate-900 sm:text-2xl"
+              className="min-w-0 flex-1 !overflow-hidden !whitespace-nowrap !text-ellipsis text-xl font-bold text-slate-900 sm:text-2xl"
               inputClassName="w-full max-w-md rounded-md border border-brand-300 bg-white px-2 py-1 text-xl font-bold text-slate-900 outline-none ring-2 ring-brand-100 sm:text-2xl"
             />
             {lists.length > 0 && (
@@ -813,64 +946,236 @@ export default function BoardPage() {
               </span>
             )}
           </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {myPermissions.canAdd && (
-              <button
-                type="button"
-                onClick={openAddList}
-                aria-label="Add list"
-                title="Add list"
-                className="flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-sm font-medium text-brand-700 hover:bg-brand-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
-              >
-                <PlusIcon className="h-4 w-4" />
-                <span className="hidden sm:inline">Add list</span>
-              </button>
-            )}
-            {members.length > 0 && (
-              <AvatarStack
-                members={members}
-                onClick={() => setIsMembersModalOpen(true)}
-                size="sm"
-              />
-            )}
-            {myPermissions.canDelete && (
-              <div ref={boardActionsRef} className="relative">
+          <div className="flex min-w-0 items-center justify-end gap-2 [grid-area:actions] sm:gap-2.5">
+            <div className="flex min-w-0 items-center gap-2.5">
+              {myPermissions.canAdd && (
                 <button
                   type="button"
-                  onClick={() => setIsBoardActionsOpen((open) => !open)}
-                  aria-label="Board actions"
-                  aria-haspopup="menu"
-                  aria-expanded={isBoardActionsOpen}
-                  aria-controls="board-actions-menu"
-                  className="rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                  onClick={openAddList}
+                  aria-label="Add list"
+                  title="Add list"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700 hover:bg-brand-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2 sm:h-auto sm:w-auto sm:gap-1.5 sm:px-2.5 sm:py-1.5 sm:text-sm sm:font-medium"
                 >
-                  <MoreIcon className="h-5 w-5" />
+                  <PlusIcon className="h-4 w-4" />
+                  <span className="hidden sm:inline">Add list</span>
                 </button>
-                {isBoardActionsOpen && (
-                  <div
-                    id="board-actions-menu"
-                    role="menu"
-                    aria-label="Board actions"
-                    className="absolute right-0 top-full z-20 mt-1 w-44 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl"
-                  >
-                    <button
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setIsBoardActionsOpen(false);
-                        setConfirmingBoardDelete(true);
-                      }}
-                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-red-600 hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
-                    >
-                      <TrashIcon className="h-4 w-4" />
-                      Delete board
-                    </button>
-                  </div>
-                )}
-              </div>
+              )}
+              {members.length > 0 && (
+                <AvatarStack
+                  members={members}
+                  activeMemberIds={activeBoardUserIds}
+                  onClick={() => setIsMembersModalOpen(true)}
+                  size="sm"
+                />
+              )}
+            </div>
+            {myPermissions.canDelete && (
+              <button
+                type="button"
+                onClick={() => setConfirmingBoardDelete(true)}
+                aria-label="Delete board"
+                title="Delete board"
+                className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300 sm:text-slate-500"
+              >
+                <TrashIcon className="h-5 w-5" />
+              </button>
             )}
           </div>
         </div>
+        <div className="mt-3 flex items-center gap-2">
+          <label className="min-w-0 flex-1 sm:max-w-xs">
+            <span className="sr-only">Search cards</span>
+            <input
+              type="search"
+              value={cardSearch}
+              onChange={(event) => setCardSearch(event.target.value)}
+              placeholder="Search cards"
+              className="h-9 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition placeholder:text-slate-400 focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+            />
+          </label>
+
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <div className="relative">
+              <button
+                ref={filterButtonRef}
+                type="button"
+                onClick={() => setIsFilterPanelOpen((open) => !open)}
+                aria-expanded={isFilterPanelOpen}
+                aria-controls="board-filter-panel"
+                className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+                  activeFilterCount > 0
+                    ? "border-brand-200 bg-brand-50 text-brand-700"
+                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                Filters
+                {activeFilterCount > 0 && (
+                  <span className="rounded-full bg-brand-600 px-1.5 py-0.5 text-[10px] leading-none text-white">
+                    {activeFilterCount}
+                  </span>
+                )}
+              </button>
+              {isFilterPanelOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-20 bg-slate-900/20 sm:hidden"
+                    aria-hidden="true"
+                    onClick={() => setIsFilterPanelOpen(false)}
+                  />
+                  <div
+                    ref={filterPanelRef}
+                    id="board-filter-panel"
+                    role="dialog"
+                    aria-label="Filter cards"
+                    className="fixed left-3 right-3 top-1/2 z-30 grid max-h-[min(80dvh,36rem)] -translate-y-1/2 gap-3 overflow-y-auto rounded-xl border border-slate-200 bg-white p-4 shadow-2xl sm:absolute sm:left-0 sm:right-auto sm:top-full sm:mt-2 sm:max-h-[min(70vh,32rem)] sm:w-[26rem] sm:translate-y-0 sm:grid-cols-2 sm:shadow-xl"
+                  >
+                <label className="grid gap-1 text-xs font-medium text-slate-500">
+                  Assignee
+                  <select
+                    value={selectedAssigneeId ?? "any"}
+                    onChange={(event) =>
+                      setSelectedAssigneeId(event.target.value === "any" ? null : event.target.value)
+                    }
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm font-normal text-slate-700 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+                  >
+                    <option value="any">Anyone</option>
+                    <option value="unassigned">Unassigned</option>
+                    {members.map((member) => (
+                      <option key={member.id} value={member.id}>{member.displayName}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-medium text-slate-500">
+                  Priority
+                  <select
+                    value={selectedPriority}
+                    onChange={(event) => setSelectedPriority(event.target.value as Priority | "none" | "any")}
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm font-normal text-slate-700 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+                  >
+                    <option value="any">Any priority</option>
+                    <option value="none">No priority</option>
+                    {(["high", "medium", "low"] as const).map((priority) => (
+                      <option key={priority} value={priority}>{PRIORITY_META[priority].label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-medium text-slate-500">
+                  Due date
+                  <select
+                    value={selectedDueDate}
+                    onChange={(event) =>
+                      setSelectedDueDate(event.target.value as typeof selectedDueDate)
+                    }
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm font-normal text-slate-700 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+                  >
+                    <option value="any">Any due date</option>
+                    <option value="overdue">Overdue</option>
+                    <option value="next7">Due in the next 7 days</option>
+                    <option value="no-date">No due date</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-xs font-medium text-slate-500">
+                  Label
+                  <select
+                    value={selectedLabel}
+                    onChange={(event) => setSelectedLabel(event.target.value as LabelColor | "any")}
+                    className="h-9 rounded-lg border border-slate-200 bg-white px-2 text-sm font-normal text-slate-700 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+                  >
+                    <option value="any">Any label</option>
+                    {LABEL_COLORS.map((color) => (
+                      <option key={color} value={color}>
+                        {color[0].toUpperCase()}{color.slice(1)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {hasActiveFilters && (
+                  <div className="sm:col-span-2">
+                    <button
+                      type="button"
+                      onClick={clearCardFilters}
+                      className="text-left text-xs font-medium text-brand-700 hover:text-brand-900"
+                    >
+                      Clear all filters
+                    </button>
+                    <p className="mt-1 text-[11px] text-slate-400">Clear filters to reorder cards.</p>
+                  </div>
+                )}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+        {hasActiveFilters && (
+          <div className="mt-2">
+            {shouldCollapseMobileChips && (
+              <div className="mb-1 flex items-center justify-between sm:hidden">
+                <button
+                  type="button"
+                  onClick={() => setIsMobileFilterSummaryOpen((open) => !open)}
+                  aria-expanded={isMobileFilterSummaryOpen}
+                  aria-controls="applied-filter-chips"
+                  className="inline-flex items-center gap-1 rounded-md py-1 text-xs font-medium text-brand-700 hover:text-brand-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                >
+                  {activeCriteriaChips.length} filters applied
+                  <span aria-hidden="true">{isMobileFilterSummaryOpen ? "Hide" : "Show"}</span>
+                </button>
+                {!isMobileFilterSummaryOpen && (
+                  <button
+                    type="button"
+                    onClick={clearCardFilters}
+                    className="rounded-md px-1.5 py-1 text-xs font-medium text-slate-500 hover:text-slate-800"
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+            )}
+            <div
+              id="applied-filter-chips"
+              aria-label="Applied filters"
+              className={`flex flex-wrap items-center gap-1.5 ${
+                shouldCollapseMobileChips && !isMobileFilterSummaryOpen ? "hidden" : "flex"
+              } sm:flex`}
+            >
+              {activeCriteriaChips.map((chip) => (
+                <span
+                  key={chip.label}
+                  className={`inline-flex max-w-full items-center gap-1 rounded-full border py-1 pl-2.5 pr-1 text-xs ${
+                    chip.label.startsWith("Search:")
+                      ? "border-sky-200 bg-sky-50 text-sky-800"
+                      : "border-brand-200 bg-brand-50 text-brand-800"
+                  }`}
+                >
+                  <span className="truncate">{chip.label}</span>
+                  <button
+                    type="button"
+                    onClick={chip.onClear}
+                    aria-label={`Remove ${chip.label} filter`}
+                    className="rounded-full p-0.5 hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500"
+                  >
+                    <XIcon className="h-3.5 w-3.5" />
+                  </button>
+                </span>
+              ))}
+              <button
+                type="button"
+                onClick={clearCardFilters}
+                className="px-1.5 py-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-slate-800 hover:underline sm:hidden"
+              >
+                Clear all
+              </button>
+              <button
+                type="button"
+                onClick={clearCardFilters}
+                className="hidden px-1.5 py-1 text-xs font-medium text-slate-500 underline-offset-2 hover:text-slate-800 hover:underline sm:inline-flex"
+              >
+                Clear all
+              </button>
+            </div>
+          </div>
+        )}
       </header>
 
       <DndContext
@@ -898,7 +1203,9 @@ export default function BoardPage() {
                 key={list.id}
                 listId={list.id}
                 title={list.title}
-                cards={list.cardOrder.map((id) => cardsById[id]).filter(Boolean)}
+                cards={list.cardOrder
+                  .map((id) => cardsById[id])
+                  .filter((card): card is Card => !!card && matchesCardFilters(card))}
                 members={members}
                 onAddCard={handleAddCard}
                 onDeleteCard={handleDeleteCard}
@@ -910,6 +1217,7 @@ export default function BoardPage() {
                 canDelete={myPermissions.canDelete}
                 pendingMoveCardIds={pendingMoveCardIds}
                 isBoardMovePending={isMovePending}
+                disableDrag={hasActiveFilters}
               />
             ))}
 
@@ -1058,6 +1366,7 @@ export default function BoardPage() {
           onClose={() => setIsMembersModalOpen(false)}
           workspaceName={workspace.name}
           members={members}
+          activeMemberIds={activeBoardUserIds}
           isOwner={isOwner}
           currentUserId={user.id}
           onInvite={handleInviteMember}

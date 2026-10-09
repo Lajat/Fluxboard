@@ -215,7 +215,14 @@ export const SocketEvents = {
   ACCESS_REVOKED: "workspace:access-revoked",
   COMMENT_ADDED: "comment:added",
   NOTIFICATION_CREATED: "notification:created",
+  BOARD_PRESENCE_UPDATED: "board:presence-updated",
 } as const;
+
+/** Active signed-in users currently viewing a board, deduplicated across tabs. */
+export interface BoardPresencePayload {
+  boardId: string;
+  userIds: string[];
+}
 
 /** Payload shape for the `card:moved` real-time event. */
 export interface CardMovedPayload {
