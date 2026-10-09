@@ -38,6 +38,8 @@ interface TaskCardViewProps extends Omit<HTMLAttributes<HTMLDivElement>, "onClic
   canDelete?: boolean;
   onDelete?: (cardId: string) => void;
   onOpen?: (card: Card) => void;
+  /** Filtered cards cannot be reordered, so show a normal pointer instead of a grab cursor. */
+  disableDrag?: boolean;
   /** True for the floating copy rendered inside <DragOverlay>. */
   isOverlay?: boolean;
 }
@@ -56,7 +58,7 @@ interface TaskCardViewProps extends Omit<HTMLAttributes<HTMLDivElement>, "onClic
  * props and are forwarded to the root element.
  */
 export const TaskCardView = forwardRef<HTMLDivElement, TaskCardViewProps>(function TaskCardView(
-  { card, members = [], canDelete = true, onDelete, onOpen, isOverlay = false, className = "", style, ...rest },
+  { card, members = [], canDelete = true, onDelete, onOpen, disableDrag = false, isOverlay = false, className = "", style, ...rest },
   ref
 ) {
   const dueLabel = formatDueDate(card.dueDate);
@@ -71,7 +73,7 @@ export const TaskCardView = forwardRef<HTMLDivElement, TaskCardViewProps>(functi
     ? // The lifted copy: full opacity, no transform of its own (rotating/scaling
       // a layer makes text render soft), just a stronger shadow + ring.
       "cursor-grabbing border-brand-300 shadow-xl ring-2 ring-brand-200"
-    : "cursor-grab border-slate-200 shadow-sm transition hover:border-brand-200 hover:shadow-md active:cursor-grabbing";
+    : `${disableDrag ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"} border-slate-200 shadow-sm transition hover:border-brand-200 hover:shadow-md`;
 
   return (
     <div
@@ -180,6 +182,8 @@ interface TaskCardProps {
    *  in the card getting recorded in two lists at once; this stops the
    *  double-drag at the source rather than only recovering from it. */
   isMovePending?: boolean;
+  /** Filtered cards cannot be safely reordered relative to hidden cards. */
+  disableDrag?: boolean;
   onOpen?: (card: Card) => void;
   members?: WorkspaceMember[];
   canDelete?: boolean;
@@ -196,10 +200,18 @@ interface TaskCardProps {
  * the board page) only start a drag after a few pixels of mouse movement / a
  * short touch hold, so a plain click or tap is never swallowed as a drag.
  */
-export function TaskCard({ card, onDelete, onOpen, members = [], canDelete = true, isMovePending = false }: TaskCardProps) {
+export function TaskCard({
+  card,
+  onDelete,
+  onOpen,
+  members = [],
+  canDelete = true,
+  isMovePending = false,
+  disableDrag = false,
+}: TaskCardProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: card.id,
-    disabled: isMovePending,
+    disabled: isMovePending || disableDrag,
   });
   const { active, over } = useDndContext();
   const activeRect = active?.rect.current.translated;
@@ -223,6 +235,7 @@ export function TaskCard({ card, onDelete, onOpen, members = [], canDelete = tru
       canDelete={canDelete}
       onDelete={onDelete}
       onOpen={onOpen}
+      disableDrag={disableDrag}
       className={
         isDropTarget
           ? insertBefore

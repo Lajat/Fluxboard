@@ -23,6 +23,10 @@ of the portfolio instead).
   card ending up recorded in two lists at once
 - **Card details** — description, due date (can't be set in the past),
   color labels, priority, assignee, a short human-readable id (e.g. `TT-7`)
+- **Board search and filters** — find cards by text, assignee, priority, due
+  date, or label; teammate avatars provide quick assignee filters
+- **Live board presence** — see which workspace members currently have a
+  board open; presence is temporary and tracked per API instance
 - **Comments** — a discussion thread on every card
 - **Real-time sync** — every mutation (card moved, list reordered, comment
   added, workspace deleted, member removed, etc.) is broadcast live to
@@ -140,8 +144,7 @@ pnpm dev        # runs both apps/web and apps/api in parallel via Turborepo
 - File attachments on cards
 - Dragging to reorder lists themselves (only cards are draggable; column
   order is fixed)
-- Real-time cursors/presence indicators (you can see changes as they
-  happen, but not who's currently looking at what)
+- Real-time cursors and card-level editing indicators
 
 ## License
 

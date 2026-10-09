@@ -28,6 +28,7 @@ interface BoardColumnProps {
    *  until its move finishes (see TaskCard for why this matters). */
   pendingMoveCardIds: Set<string>;
   isBoardMovePending: boolean;
+  disableDrag: boolean;
 }
 
 /**
@@ -52,6 +53,7 @@ export function BoardColumn({
   canDelete,
   pendingMoveCardIds,
   isBoardMovePending,
+  disableDrag,
 }: BoardColumnProps) {
   const columnDropId = `column-${listId}`;
   const { setNodeRef } = useDroppable({ id: columnDropId });
@@ -138,9 +140,13 @@ export function BoardColumn({
               onOpen={onOpenCard}
               canDelete={canDelete}
               isMovePending={isBoardMovePending || pendingMoveCardIds.has(card.id)}
+              disableDrag={disableDrag}
             />
           ))}
         </SortableContext>
+        {cards.length === 0 && disableDrag && (
+          <p className="px-2 py-4 text-center text-xs text-slate-400">No cards match these filters.</p>
+        )}
         {isDroppingAtEnd &&
           (cards.length === 0 ? (
             <div className="flex min-h-16 items-center justify-center rounded-lg border-2 border-dashed border-brand-300 bg-white/70 text-xs font-medium text-brand-600">
