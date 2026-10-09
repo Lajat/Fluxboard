@@ -11,6 +11,7 @@ export interface CardPermissions {
 
 /** A workspace member additionally has workspace-scoped permissions on both axes: board-level and card-level. */
 export interface WorkspacePermissions extends CardPermissions {
+  canEditWorkspace: boolean;
   canAddBoards: boolean;
   canEditBoards: boolean;
   canDeleteBoards: boolean;
@@ -39,7 +40,8 @@ export function isWorkspaceMember(workspace: WorkspaceDocument, userId: string):
 }
 
 /**
- * A workspace member's effective permissions on BOTH axes. Returns null
+ * A workspace member's effective workspace-, board-, and card-level
+ * permissions. Returns null
  * if they're not a member at all — callers that already know the user is
  * a member (having just checked isWorkspaceMember) can safely assert this
  * away, but the null case exists so this function is safe to call
@@ -47,10 +49,10 @@ export function isWorkspaceMember(workspace: WorkspaceDocument, userId: string):
  *
  * Handles two backward-compatibility cases so nobody's access silently
  * changed when the two-axis model shipped:
- * - No entry in workspace.memberPermissions at all → full access on both
- *   axes (the long-standing default for an unrestricted member).
+ * - No entry in workspace.memberPermissions at all → full board/card
+ *   access (the long-standing default); workspace rename remains owner-only.
  * - An entry that predates the two-axis model (only has the old
- *   canAdd/canEdit/canDelete fields, not the six new ones) → that single
+ *   canAdd/canEdit/canDelete fields, not the newer permission fields) → that single
  *   restriction is mapped onto BOTH axes uniformly, since that's the
  *   closest equivalent to what the owner originally intended before
  *   board-level and card-level permissions were split apart.
@@ -62,21 +64,25 @@ export function getMemberPermissions(workspace: WorkspaceDocument, userId: strin
 
   if (!entry) {
     return {
+      canEditWorkspace: workspace.ownerId.toString() === userId,
       canAddBoards: true, canEditBoards: true, canDeleteBoards: true,
       canAddCards: true, canEditCards: true, canDeleteCards: true,
       canAdd: true, canEdit: true, canDelete: true,
     };
   }
 
-  // New-shape entry: at least one of the six new fields is actually
+  // New-shape entry: at least one current permission field is actually
   // present (not undefined) — use them directly, falling back to true
   // for any that were somehow left unset.
   const hasNewShape =
+    entry.canEditWorkspace !== undefined ||
     entry.canAddBoards !== undefined || entry.canEditBoards !== undefined || entry.canDeleteBoards !== undefined ||
     entry.canAddCards !== undefined || entry.canEditCards !== undefined || entry.canDeleteCards !== undefined;
 
   if (hasNewShape) {
     return {
+      canEditWorkspace:
+        workspace.ownerId.toString() === userId || entry.canEditWorkspace === true,
       canAddBoards: entry.canAddBoards ?? true,
       canEditBoards: entry.canEditBoards ?? true,
       canDeleteBoards: entry.canDeleteBoards ?? true,
@@ -95,6 +101,7 @@ export function getMemberPermissions(workspace: WorkspaceDocument, userId: strin
   const canEdit = entry.canEdit ?? true;
   const canDelete = entry.canDelete ?? true;
   return {
+    canEditWorkspace: workspace.ownerId.toString() === userId,
     canAddBoards: canAdd, canEditBoards: canEdit, canDeleteBoards: canDelete,
     canAddCards: canAdd, canEditCards: canEdit, canDeleteCards: canDelete,
     canAdd, canEdit, canDelete,

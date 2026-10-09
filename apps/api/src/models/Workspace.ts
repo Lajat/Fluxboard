@@ -2,30 +2,28 @@ import { Schema, model, Document, Types } from "mongoose";
 
 /**
  * One member's explicit permission overrides — only present once an owner
- * has restricted that member away from the full-access default.
+ * has changed the default workspace, board, or content access.
  *
- * Two independent axes, each with its own add/edit/delete:
+ * Workspace rename is a separately delegated capability. Two content
+ * axes each have their own add/edit/delete:
  * - Board-level (canAddBoards/canEditBoards/canDeleteBoards): create,
  *   rename, or remove boards within the workspace.
  * - Card-level (canAddCards/canEditCards/canDeleteCards): create, edit,
  *   or remove lists/cards/comments on boards they can already see.
  *
- * All six are optional at the schema level on purpose, for backward
- * compatibility: entries created before this two-axis model existed only
- * have the old canAdd/canEdit/canDelete fields, not these. Rather than
- * migrating every existing document, getMemberPermissions (lib/permissions.ts)
- * detects which shape an entry is and maps the old uniform restriction
- * onto both axes — so nobody's access silently changes just because this
- * shipped.
+ * Permission fields are optional at the schema level for backward
+ * compatibility. Older entries have only canAdd/canEdit/canDelete; those
+ * map onto the board and content axes, while workspace rename remains
+ * owner-only unless explicitly delegated.
  */
 export interface MemberPermissionsEntry {
   userId: Types.ObjectId;
   // Legacy shape (pre-dates the two-axis model) — kept only so old
-  // entries still parse; new entries are written with the six fields
-  // below instead, never these.
+  // entries still parse; new entries use the current fields below.
   canAdd?: boolean;
   canEdit?: boolean;
   canDelete?: boolean;
+  canEditWorkspace?: boolean;
   canAddBoards?: boolean;
   canEditBoards?: boolean;
   canDeleteBoards?: boolean;
@@ -40,9 +38,7 @@ export interface WorkspaceDocument extends Document {
   ownerId: Types.ObjectId;
   memberIds: Types.ObjectId[];
   // Per-member permission overrides. Deliberately sparse — a member only
-  // gets an entry here once the owner has restricted them away from the
-  // full-access default (see lib/permissions.ts), so most workspaces'
-  // members will have no entries at all here.
+  // gets an entry once the owner changes the defaults (see lib/permissions.ts).
   memberPermissions: MemberPermissionsEntry[];
   // A random, unguessable token that lets anyone holding the link join
   // this workspace without needing to already have an account known to
@@ -66,6 +62,7 @@ const memberPermissionsSchema = new Schema<MemberPermissionsEntry>(
     canAdd: { type: Boolean },
     canEdit: { type: Boolean },
     canDelete: { type: Boolean },
+    canEditWorkspace: { type: Boolean },
     canAddBoards: { type: Boolean },
     canEditBoards: { type: Boolean },
     canDeleteBoards: { type: Boolean },

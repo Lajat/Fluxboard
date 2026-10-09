@@ -51,7 +51,10 @@ export async function createWorkspace(req: Request, res: Response) {
   // — creating a workspace IS adding yourself as its first member.
   const creator = await UserModel.findById(req.userId);
   const memberPreview = creator ? [toMemberPreview(creator)] : [];
-  const workspaceResponse = toWorkspaceResponse(workspace, memberPreview);
+  const workspaceResponse = {
+    ...toWorkspaceResponse(workspace, memberPreview),
+    myPermissions: getMemberPermissions(workspace, req.userId!)!,
+  };
   if (creator) {
     const member = toMemberResponse(creator, workspace);
     req.app.get("io").to(`user:${req.userId}`).emit(SocketEvents.MEMBER_ADDED, {
@@ -86,7 +89,10 @@ export async function listMyWorkspaces(req: Request, res: Response) {
               ? 1
               : a.displayName.localeCompare(b.displayName)
         );
-      return toWorkspaceResponse(workspace, memberPreview);
+      return {
+        ...toWorkspaceResponse(workspace, memberPreview),
+        myPermissions: getMemberPermissions(workspace, req.userId!)!,
+      };
     }),
   });
 }
@@ -117,10 +123,8 @@ export async function getWorkspace(req: Request, res: Response) {
 
 /**
  * PATCH /workspaces/:workspaceId
- * Renames a workspace. Any member can rename it — same permission level
- * as creating boards inside it, deliberately not restricted to the owner
- * the way addMember is (renaming carries far lower risk than granting
- * access to new people).
+ * Renames a workspace. The owner can always do so; other members need the
+ * explicit canEditWorkspace permission.
  */
 export async function updateWorkspace(req: Request, res: Response) {
   const { workspaceId } = req.params;
@@ -135,16 +139,22 @@ export async function updateWorkspace(req: Request, res: Response) {
     return res.status(404).json({ error: "workspace not found" });
   }
 
-  const isMember = workspace.memberIds.some((id) => id.toString() === req.userId);
-  if (!isMember) {
+  const permissions = getMemberPermissions(workspace, req.userId!);
+  if (!permissions) {
     return res.status(404).json({ error: "workspace not found" });
+  }
+  if (!permissions.canEditWorkspace) {
+    return res.status(403).json({ error: "you don't have permission to edit this workspace" });
   }
 
   workspace.name = name;
   await workspace.save();
 
-  const workspaceResponse = toWorkspaceResponse(workspace);
-  req.app.get("io").to(`workspace:${workspaceId}`).emit(SocketEvents.WORKSPACE_UPDATED, workspaceResponse);
+  const workspaceResponse = {
+    ...toWorkspaceResponse(workspace),
+    myPermissions: getMemberPermissions(workspace, req.userId!)!,
+  };
+  req.app.get("io").to(`workspace:${workspaceId}`).emit(SocketEvents.WORKSPACE_UPDATED, toWorkspaceResponse(workspace));
 
   res.json(workspaceResponse);
 }
@@ -215,6 +225,7 @@ function toMemberResponse(user: any, workspace: any): WorkspaceMember {
       canAdd: true,
       canEdit: true,
       canDelete: true,
+      canEditWorkspace: workspace.ownerId.toString() === userId,
       canAddBoards: true,
       canEditBoards: true,
       canDeleteBoards: true,
@@ -326,7 +337,10 @@ export async function addMember(req: Request, res: Response) {
   io.to(`user:${userToAdd._id}`).emit(SocketEvents.MEMBER_ADDED, {
     workspaceId,
     member,
-    workspace: toWorkspaceResponse(workspace, memberPreview),
+    workspace: {
+      ...toWorkspaceResponse(workspace, memberPreview),
+      myPermissions: getMemberPermissions(workspace, userToAdd._id.toString())!,
+    },
   });
 
   // Persisted notification (bell icon), on top of the live-state-update
@@ -396,8 +410,8 @@ export async function removeMember(req: Request, res: Response) {
 
 /**
  * PATCH /workspaces/:workspaceId/members/:userId/permissions
- * Sets a member's permission flags across both axes (board-level and
- * card-level — see WorkspacePermissions in shared-types for what each
+ * Sets a member's workspace-, board-, and card-level permission flags
+ * (see WorkspacePermissions in shared-types for what each
  * means) — each field is optional in the request body so the owner can
  * flip just one switch at a time without resending the whole set.
  * Owner-only, and the owner can't be targeted (their permissions are
@@ -411,7 +425,15 @@ export async function removeMember(req: Request, res: Response) {
  */
 export async function updateMemberPermissions(req: Request, res: Response) {
   const { workspaceId, userId } = req.params;
-  const { canAddBoards, canEditBoards, canDeleteBoards, canAddCards, canEditCards, canDeleteCards } = req.body;
+  const {
+    canEditWorkspace,
+    canAddBoards,
+    canEditBoards,
+    canDeleteBoards,
+    canAddCards,
+    canEditCards,
+    canDeleteCards,
+  } = req.body;
 
   const workspace = await WorkspaceModel.findById(workspaceId);
   if (!workspace) {
@@ -435,6 +457,7 @@ export async function updateMemberPermissions(req: Request, res: Response) {
   if (!entry) {
     entry = {
       userId: new Types.ObjectId(userId),
+      canEditWorkspace: false,
       canAddBoards: true, canEditBoards: true, canDeleteBoards: true,
       canAddCards: true, canEditCards: true, canDeleteCards: true,
     };
@@ -454,6 +477,7 @@ export async function updateMemberPermissions(req: Request, res: Response) {
     entry.canDeleteCards = entry.canDelete;
   }
 
+  if (canEditWorkspace !== undefined) entry.canEditWorkspace = !!canEditWorkspace;
   if (canAddBoards !== undefined) entry.canAddBoards = !!canAddBoards;
   if (canEditBoards !== undefined) entry.canEditBoards = !!canEditBoards;
   if (canDeleteBoards !== undefined) entry.canDeleteBoards = !!canDeleteBoards;

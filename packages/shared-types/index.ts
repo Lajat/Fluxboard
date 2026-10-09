@@ -32,11 +32,9 @@ export interface Workspace {
   memberPreview?: WorkspaceMemberPreview[];
   /**
    * The CALLING user's own resolved permissions in this workspace —
-   * populated only by GET /workspaces/:id (a list endpoint returning many
-   * workspaces has no obvious single "whose permissions" to compute, so
-   * it's left undefined there). This is what lets an invited member see
-   * their own access level without a separate endpoint — see the "Your
-   * access" UI in the workspace page.
+   * populated by workspace list and detail endpoints. This lets a member
+   * see their own access level without a separate endpoint and lets the
+   * UI gate workspace-level actions consistently.
    */
   myPermissions?: WorkspacePermissions;
 }
@@ -55,10 +53,11 @@ export interface CardPermissions {
 }
 
 /**
- * A workspace member's full permission set — card-level (see
- * CardPermissions) plus board-level (create/rename/delete boards
- * themselves). Board-level rights exist ONLY for workspace members —
- * a single-board guest (BoardGuest, below) never has them, by design.
+ * A workspace member's full permission set — workspace rename,
+ * board-level (create/rename/delete boards), and card-level (see
+ * CardPermissions). Workspace and board-level rights exist ONLY for
+ * workspace members — a single-board guest (BoardGuest, below) never
+ * has them, by design.
  *
  * Dependency rule enforced both in the permission-settings UI and on the
  * server (apps/api's updateMemberPermissions): Delete requires Add AND
@@ -67,6 +66,7 @@ export interface CardPermissions {
  * delete implies.
  */
 export interface WorkspacePermissions extends CardPermissions {
+  canEditWorkspace: boolean;
   canAddBoards: boolean;
   canEditBoards: boolean;
   canDeleteBoards: boolean;

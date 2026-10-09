@@ -15,6 +15,7 @@ import { Modal } from "@/components/ui/Modal";
 import { avatarColorFor, initialsFor } from "@/lib/avatar";
 import {
   FolderIcon,
+  CrownIcon,
   PlusIcon,
   TrashIcon,
   SpinnerIcon,
@@ -24,7 +25,12 @@ import {
 } from "@/components/ui/icons";
 import { ProfileMenu } from "@/components/ProfileMenu";
 import type { Workspace } from "@fluxboard/shared-types";
-import { SocketEvents, type WorkspaceMembershipPayload, type AccessRevokedPayload } from "@fluxboard/shared-types";
+import {
+  SocketEvents,
+  type WorkspaceMembershipPayload,
+  type AccessRevokedPayload,
+  type MemberPermissionsUpdatedPayload,
+} from "@fluxboard/shared-types";
 
 export default function WorkspacesPage() {
   const { user, accessToken, isLoading: authLoading } = useAuth();
@@ -47,8 +53,16 @@ export default function WorkspacesPage() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOrder, setSortOrder] = useState<"name" | "created">("name");
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [viewMode, setViewMode] = useState<"grid" | "list">(() => {
+    if (typeof window === "undefined") return "grid";
+    const stored = window.localStorage.getItem("fluxboard:workspaces-view-mode");
+    return stored === "list" ? "list" : "grid";
+  });
   const [deletingWorkspace, setDeletingWorkspace] = useState<Workspace | null>(null);
+
+  useEffect(() => {
+    window.localStorage.setItem("fluxboard:workspaces-view-mode", viewMode);
+  }, [viewMode]);
   const deletedWorkspaceIds = useRef(new Set<string>());
   const createWorkspaceInFlight = useRef(false);
 
@@ -153,11 +167,24 @@ export default function WorkspacesPage() {
       setWorkspaces((prev) => prev.filter((ws) => ws.id !== payload.workspaceId));
     }
 
+    function handleMemberPermissionsUpdated({ workspaceId, member }: MemberPermissionsUpdatedPayload) {
+      if (member.id !== user!.id) return;
+      setWorkspaces((prev) =>
+        prev.map((workspace) =>
+          workspace.id === workspaceId
+            ? { ...workspace, myPermissions: member.permissions }
+            : workspace
+        )
+      );
+    }
+
     socket.on(SocketEvents.MEMBER_ADDED, handleMemberAdded);
     socket.on(SocketEvents.ACCESS_REVOKED, handleAccessRevoked);
+    socket.on(SocketEvents.MEMBER_PERMISSIONS_UPDATED, handleMemberPermissionsUpdated);
     return () => {
       socket.off(SocketEvents.MEMBER_ADDED, handleMemberAdded);
       socket.off(SocketEvents.ACCESS_REVOKED, handleAccessRevoked);
+      socket.off(SocketEvents.MEMBER_PERMISSIONS_UPDATED, handleMemberPermissionsUpdated);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
@@ -294,8 +321,9 @@ export default function WorkspacesPage() {
                 type="button"
                 onClick={() => setViewMode("grid")}
                 aria-label="Grid view"
+                title="Grid view"
                 aria-pressed={viewMode === "grid"}
-                className={`rounded-md p-1.5 ${
+                className={`cursor-pointer rounded-md p-1.5 ${
                   viewMode === "grid" ? "bg-brand-50 text-brand-700" : "text-slate-400 hover:text-slate-700"
                 }`}
               >
@@ -305,8 +333,9 @@ export default function WorkspacesPage() {
                 type="button"
                 onClick={() => setViewMode("list")}
                 aria-label="List view"
+                title="List view"
                 aria-pressed={viewMode === "list"}
-                className={`rounded-md p-1.5 ${
+                className={`cursor-pointer rounded-md p-1.5 ${
                   viewMode === "list" ? "bg-brand-50 text-brand-700" : "text-slate-400 hover:text-slate-700"
                 }`}
               >
@@ -347,8 +376,10 @@ export default function WorkspacesPage() {
               >
                 <Link
                   href={`/workspaces/${ws.id}`}
-                  className={`flex ${viewMode === "list" ? "items-center gap-3" : "flex-col"}`}
-                >
+                  aria-label={`Open ${ws.name}`}
+                  className="absolute inset-0 z-0 rounded-xl"
+                />
+                <div className={`pointer-events-none relative z-10 flex ${viewMode === "list" ? "items-center gap-3" : "flex-col"}`}>
                   <div
                     className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600 ${
                       viewMode === "grid" ? "mb-1" : ""
@@ -356,20 +387,35 @@ export default function WorkspacesPage() {
                   >
                     <FolderIcon className="h-4 w-4" />
                   </div>
-                  <div className={`min-w-0 ${viewMode === "list" ? "flex-1 pr-8" : "mt-2 pr-8"}`}>
-                    <EditableTitle
-                      as="h2"
-                      value={ws.name}
-                      onSave={(next) => handleRenameWorkspace(ws.id, next)}
-                      className="font-semibold text-slate-900"
-                    />
-                    <p className="mt-0.5 text-xs text-slate-400">
-                      {ws.memberIds.length} member{ws.memberIds.length === 1 ? "" : "s"}
-                    </p>
+                  <div className={`min-w-0 ${viewMode === "list" ? "flex-1 pr-8" : "mt-2"}`}>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <EditableTitle
+                        as="h2"
+                        value={ws.name}
+                        onSave={(next) => handleRenameWorkspace(ws.id, next)}
+                        disabled={!ws.myPermissions?.canEditWorkspace}
+                        className="pointer-events-auto font-semibold text-slate-900"
+                      />
+                    </div>
+                    <div className="mt-0.5 flex items-center justify-between gap-2">
+                      <p className="text-xs text-slate-400">
+                        {ws.memberIds.length} member{ws.memberIds.length === 1 ? "" : "s"}
+                      </p>
+                      {ws.ownerId === user.id && (
+                        <span
+                          title="You own this workspace"
+                          aria-label="You own this workspace"
+                          className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-amber-700"
+                        >
+                          <CrownIcon aria-hidden="true" className="h-3.5 w-3.5" />
+                          Owner
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </Link>
+                </div>
                 {viewMode === "list" && (
-                  <div className="mr-9 flex shrink-0 items-center gap-6">
+                  <div className="pointer-events-none mr-9 flex shrink-0 items-center gap-6">
                     {ws.memberPreview && ws.memberPreview.length > 0 && (
                       <div
                         className="flex items-center"
@@ -410,7 +456,7 @@ export default function WorkspacesPage() {
                 <button
                   onClick={() => setDeletingWorkspace(ws)}
                   aria-label={`Delete ${ws.name}`}
-                  className={`absolute right-3 rounded-md p-1.5 text-slate-300 opacity-100 hover:bg-red-50 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100 ${
+                  className={`absolute right-3 z-20 rounded-md p-1.5 text-slate-300 opacity-100 hover:bg-red-50 hover:text-red-500 sm:opacity-0 sm:group-hover:opacity-100 ${
                     viewMode === "list" ? "top-1/2 -translate-y-1/2" : "top-3"
                   }`}
                 >
