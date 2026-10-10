@@ -71,25 +71,26 @@ function removeBoardPresence(boardId: string, userId: string, socketId: string) 
   broadcastBoardPresence(boardId);
 }
 
+io.use((socket, next) => {
+  const ticket = socket.handshake.auth?.ticket;
+  const userId = typeof ticket === "string"
+    ? getUserIdFromSocketTicket(ticket)
+    : getUserIdFromHandshake(socket.handshake.headers.cookie);
+
+  if (!userId) {
+    next(new Error("Socket authentication failed"));
+    return;
+  }
+
+  socket.data.userId = userId;
+  next();
+});
+
 io.on("connection", (socket) => {
   console.log(`[socket] client connected: ${socket.id}`);
 
-  // Identify the connection right away using the accessToken cookie sent
-  // with the socket.io handshake (the initial HTTP request Socket.io
-  // makes before upgrading to a WebSocket) — the browser attaches it
-  // automatically for the same reason it does on any other request to
-  // this origin, since the cookie's path ("/") covers this too. This
-  // replaces an earlier design where the client had to explicitly emit
-  // its access token after connecting: that could only ever work when the
-  // token was something JS-readable in the first place (localStorage), and
-  // reading it here instead means every socket is identified synchronously
-  // at connection time, with no separate step and no race between
-  // "connected" and "identified" for the rest of this file to worry about.
-  const userId = getUserIdFromHandshake(socket.handshake.headers.cookie);
-  if (userId) {
-    socket.data.userId = userId;
-    socket.join(`user:${userId}`);
-  }
+  const userId = socket.data.userId as string;
+  socket.join(`user:${userId}`);
 
   const joinedPresenceBoards = new Set<string>();
   const boardJoinRequests = new Map<string, number>();
@@ -180,6 +181,22 @@ function getUserIdFromHandshake(cookieHeader: string | undefined): string | unde
     if (!secret) return undefined;
     const decoded = jwt.verify(decodeURIComponent(accessToken), secret) as { userId: string };
     return decoded.userId;
+  } catch {
+    return undefined;
+  }
+}
+
+function getUserIdFromSocketTicket(ticket: string): string | undefined {
+  try {
+    const secret = process.env.JWT_ACCESS_SECRET;
+    if (!secret) return undefined;
+    const decoded = jwt.verify(ticket, secret, { audience: "fluxboard-socket" }) as {
+      userId?: unknown;
+      purpose?: unknown;
+    };
+    return decoded.purpose === "socket" && typeof decoded.userId === "string"
+      ? decoded.userId
+      : undefined;
   } catch {
     return undefined;
   }

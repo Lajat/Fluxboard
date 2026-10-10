@@ -7,6 +7,7 @@ import { disconnectSocket, getSocket } from "@/lib/socket";
 import { useToast } from "@/components/ui/Toast";
 import type { User } from "@fluxboard/shared-types";
 import { SocketEvents, type AccessRevokedPayload } from "@fluxboard/shared-types";
+import { getPostAuthRedirect } from "@/lib/authRedirect";
 
 interface AuthContextValue {
   user: User | null;
@@ -55,11 +56,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setIsLoading(false));
   }, []);
 
-  // Connects the shared socket once we know we're authenticated. No
-  // separate "identify" call is needed — the socket.io handshake carries
-  // the same httpOnly cookie automatically (see lib/socket.ts), so simply
-  // having an open connection at all is sufficient once accessToken is
-  // truthy.
+  // Connects the shared socket once we know we're authenticated. The
+  // connection obtains its short-lived authentication ticket through the
+  // same-origin API proxy (see lib/socket.ts).
   useEffect(() => {
     if (accessToken) getSocket();
   }, [accessToken]);
@@ -88,33 +87,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
-  /**
-   * Where to send the user right after a successful login/signup. Normally
-   * that's just /workspaces, but if they arrived here via a link that
-   * needs them authenticated first — right now, only the invite-link flow
-   * does this (?redirect=/invite/<token>) — send them back to finish what
-   * they came here to do instead of dropping them on the generic
-   * workspaces list.
-   */
-  function getPostAuthRedirect(): string {
-    if (typeof window === "undefined") return "/workspaces";
-    const redirect = new URLSearchParams(window.location.search).get("redirect");
-    // Only ever redirect to a same-app relative path, and never back into
-    // the auth pages themselves — both guard against a malformed or
-    // tampered redirect param sending the user somewhere unintended or
-    // into a login<->redirect loop.
-    if (
-      redirect &&
-      redirect.startsWith("/") &&
-      !redirect.startsWith("//") &&
-      !redirect.startsWith("/login") &&
-      !redirect.startsWith("/signup")
-    ) {
-      return redirect;
-    }
-    return "/workspaces";
-  }
-
   async function login(email: string, password: string) {
     // The response body only contains the user profile now — both tokens
     // are set as httpOnly cookies directly by the server's Set-Cookie
@@ -126,7 +98,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(result.user);
     setAccessToken(SESSION_FLAG);
     setIsLoading(false);
-    router.push(getPostAuthRedirect());
+    router.push(
+      typeof window === "undefined"
+        ? "/workspaces"
+        : getPostAuthRedirect(window.location.search)
+    );
   }
 
   async function signup(email: string, password: string, displayName: string) {
@@ -137,7 +113,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(result.user);
     setAccessToken(SESSION_FLAG);
     setIsLoading(false);
-    router.push(getPostAuthRedirect());
+    router.push(
+      typeof window === "undefined"
+        ? "/workspaces"
+        : getPostAuthRedirect(window.location.search)
+    );
   }
 
   async function logout() {

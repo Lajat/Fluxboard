@@ -8,6 +8,7 @@ import { emailError as getEmailError, passwordError as getPasswordError } from "
 import { PasswordInput } from "@/components/ui/PasswordInput";
 import { LayoutIcon, SpinnerIcon, CheckIcon } from "@/components/ui/icons";
 import { APP_NAME } from "@/lib/constants";
+import { AuthPageRedirect } from "@/components/AuthPageRedirect";
 
 type Touched = { displayName?: boolean; email?: boolean; password?: boolean; confirmPassword?: boolean };
 
@@ -55,6 +56,7 @@ export default function SignupPage() {
   }
 
   return (
+    <AuthPageRedirect>
     <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-brand-50 via-slate-50 to-slate-50 px-4 py-10">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex flex-col items-center gap-2">
@@ -172,5 +174,6 @@ export default function SignupPage() {
         </div>
       </div>
     </main>
+    </AuthPageRedirect>
   );
 }

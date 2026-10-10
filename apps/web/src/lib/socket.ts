@@ -1,4 +1,5 @@
 import { io, Socket } from "socket.io-client";
+import { apiFetch } from "./apiClient";
 
 const SOCKET_URL = process.env.NEXT_PUBLIC_SOCKET_URL || "http://localhost:4000";
 
@@ -13,22 +14,33 @@ let socket: Socket | null = null;
  * duplicate event handlers to pile up. Call this once per page (e.g. in a
  * useEffect on mount) and reuse the same socket across the session.
  *
- * Authentication happens through the httpOnly accessToken cookie attached to
- * the Socket.IO handshake. Reconnects repeat that handshake, so no separate
- * client-side token or identify event is needed.
+ * The browser requests a short-lived socket ticket through the same-origin
+ * API proxy for each connection attempt. This keeps the direct API socket
+ * independent from cross-site cookie delivery and refreshes credentials on
+ * reconnect without exposing the long-lived access or refresh token.
  */
 export function getSocket(): Socket {
   if (!socket) {
     socket = io(SOCKET_URL, {
       autoConnect: true,
       withCredentials: true,
+      auth: (callback) => {
+        void apiFetch<{ ticket: string }>("/auth/socket-ticket", { method: "POST" })
+          .then(({ ticket }) => callback({ ticket }))
+          .catch((error: unknown) => {
+            console.error("[socket] Could not obtain an authentication ticket:", error);
+            callback({});
+          });
+      },
       // Reconnect automatically on drop (e.g. laptop sleep, brief network
       // blip) — the default socket.io-client behavior, made explicit here
       // since it's load-bearing for a real-time board that should recover
       // on its own rather than silently going stale.
       reconnection: true,
     });
-
+    socket.on("connect_error", (error) => {
+      console.error("[socket] Connection failed:", error.message);
+    });
   }
   return socket;
 }
