@@ -56,16 +56,13 @@ browser refuses to let an HTTPS page call an HTTP API at all (mixed-content
 blocking) — CloudFront terminates HTTPS at the edge and talks plain HTTP to
 Elastic Beanstalk internally, which the browser never sees.
 
-**Auth cookies and cross-site requests:** the frontend and backend are on
-different registrable domains (`vercel.app` vs. `cloudfront.net`), which
-makes every API call a cross-site request from the browser's point of
-view. Auth cookies use `sameSite: "none"` in production specifically for
-this reason — `"lax"`/`"strict"` both silently block a cookie on
-cross-site `fetch()` calls, which is a real bug this project hit and fixed
-(see [`BLOG_POST_DRAFT.md`](./BLOG_POST_DRAFT.md) for a related one).
-`NODE_ENV=production` is baked into the Docker image itself, not left as
-an Elastic Beanstalk console setting, since this cookie behavior depends
-on it entirely.
+**Auth cookies and cross-site requests:** browser REST calls use the
+frontend's same-origin `/api-proxy` rewrite. Socket.IO connects directly
+to the API and authenticates with a short-lived ticket fetched through
+that proxy, so real-time updates do not depend on the browser sending a
+frontend-domain cookie to the API domain. Production auth cookies retain
+`sameSite: "none"` for direct API compatibility; `NODE_ENV=production` is
+baked into the Docker image so the cookie policy is set correctly.
 
 ## Real-time event scoping
 

@@ -6,6 +6,7 @@ import {
   refresh,
   logout,
   getCurrentUser,
+  createSocketTicket,
   forgotPassword,
   resetPassword,
 } from "../controllers/authController";
@@ -25,5 +26,6 @@ router.post("/auth/reset-password", resetPassword);
 // Requires a valid access token — this is the simplest possible route to
 // sanity-check that requireAuth + a real login are working together.
 router.get("/auth/me", requireAuth, getCurrentUser);
+router.post("/auth/socket-ticket", requireAuth, createSocketTicket);
 
 export default router;

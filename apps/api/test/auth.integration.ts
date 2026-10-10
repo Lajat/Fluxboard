@@ -88,6 +88,24 @@ async function run() {
   assert.strictEqual(res.status, 401, "expected 401 with no cookies");
   console.log("✓ GET /auth/me rejects requests with no cookies");
 
+  // SOCKET TICKET
+  res = await fetch(`${BASE}/auth/socket-ticket`, {
+    method: "POST",
+    headers: { Cookie: cookieHeader },
+  });
+  assert.strictEqual(res.status, 200, "expected 200 for an authenticated socket-ticket request");
+  const ticketBody = await res.json();
+  assert.match(ticketBody.ticket, /^[\w-]+\.[\w-]+\.[\w-]+$/, "expected a signed socket ticket");
+  const ticketClaims = JSON.parse(Buffer.from(ticketBody.ticket.split(".")[1], "base64url").toString());
+  assert.strictEqual(ticketClaims.purpose, "socket");
+  assert.strictEqual(ticketClaims.aud, "fluxboard-socket");
+  assert.ok(ticketClaims.exp > Math.floor(Date.now() / 1000), "socket ticket should expire in the future");
+  console.log("✓ POST /auth/socket-ticket issues a short-lived authenticated ticket");
+
+  res = await fetch(`${BASE}/auth/socket-ticket`, { method: "POST" });
+  assert.strictEqual(res.status, 401, "expected 401 for a socket-ticket request without cookies");
+  console.log("✓ POST /auth/socket-ticket rejects unauthenticated requests");
+
   // REFRESH
   res = await fetch(`${BASE}/auth/refresh`, {
     method: "POST",

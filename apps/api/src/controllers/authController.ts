@@ -10,6 +10,7 @@ const ACCESS_TOKEN_TTL_MS = 15 * 60 * 1000; // 15 minutes — sent with every re
 const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — only used to mint new access tokens
 const ACCESS_TOKEN_TTL_JWT = "15m";
 const REFRESH_TOKEN_TTL_JWT = "30d";
+const SOCKET_TICKET_TTL_SECONDS = 60;
 const REFRESH_COOKIE_PATH = "/api-proxy/auth/refresh";
 
 const isProd = process.env.NODE_ENV === "production";
@@ -70,8 +71,8 @@ function issueTokens(userId: string) {
  *    narrowly is the main extra protection a refresh token gets beyond
  *    just being httpOnly.
  * REST calls are proxied through the frontend's same origin. Socket.IO
- * still connects directly to the API, so production cookies retain
- * SameSite=None for that cross-site handshake.
+ * connects directly to the API using a short-lived ticket; SameSite=None
+ * remains for compatibility with direct API clients and cookie handshakes.
  */
 function setAuthCookies(res: Response, accessToken: string, refreshToken: string) {
   res.cookie("accessToken", accessToken, {
@@ -213,6 +214,32 @@ export async function getCurrentUser(req: Request, res: Response) {
     return res.status(404).json({ error: "user not found" });
   }
   res.json(toUserResponse(user));
+}
+
+/**
+ * POST /auth/socket-ticket
+ * Issues a short-lived credential for the direct Socket.IO connection.
+ * The browser obtains it through the same-origin REST proxy, where its
+ * httpOnly access cookie is available, then sends it only in the socket
+ * handshake instead of relying on a cross-site cookie.
+ */
+export function createSocketTicket(req: Request, res: Response) {
+  if (!req.userId) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+
+  const secret = process.env.JWT_ACCESS_SECRET;
+  if (!secret) {
+    throw new Error("JWT_ACCESS_SECRET is not configured on the server");
+  }
+
+  const ticket = jwt.sign(
+    { userId: req.userId, purpose: "socket" },
+    secret,
+    { expiresIn: SOCKET_TICKET_TTL_SECONDS, audience: "fluxboard-socket" }
+  );
+  res.set("Cache-Control", "no-store");
+  res.json({ ticket });
 }
 
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
